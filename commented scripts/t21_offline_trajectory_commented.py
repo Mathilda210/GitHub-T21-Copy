@@ -1,7 +1,8 @@
-# This script creates a ROS 2 node that periodically publishes 
-# offline joint-trajectory (offline=pre-computed) commands for the left arm, right arm, 
-# and waist to the /external/offline_motion_command topic, 
-# then stops the timers once all commands have been sent.
+# This script creates a ROS 2 node that publishes three offline joint-trajectory
+# commands to the /external/offline_motion_command topic:
+# the right arm after 2.9 seconds, the left arm after 3.5 seconds,
+# and the waist after 4.0 seconds. Each command contains one pre-computed
+# trajectory point, and all timers are canceled after the three commands are sent.
 
 
 
@@ -20,6 +21,8 @@ from px_mc_msgs.msg import OfflineMotionCommand, TrajectoryArray, TrajectoryPoin
 #--------------------------- PUBLISHER NODE CLASS ---------------------------
 class TrajectoryPublisher(Node):
     def __init__(self):
+        '''Initialize the ROS 2 node, publisher, state flags, and timers.'''
+
         super().__init__('trajectory_publisher')
 
         self.publisher = self.create_publisher(
@@ -53,8 +56,9 @@ class TrajectoryPublisher(Node):
         )
 
 
-    # Method to generate a simple joint trajectory point for the specified arm index (0=left, 1=right)
     def generate_trajectory(self, arm_idx, num_joints=7, steps=11, start=0.0, end=1.0):
+        '''Generate one joint trajectory point for the selected arm.'''
+
         # Create a new empty TrajectoryPoint message (custom)
         point = TrajectoryPoint()
         # time_from_start is a Duration message that specifies how long it should take to 
@@ -88,18 +92,18 @@ class TrajectoryPublisher(Node):
         return point
 
 
-    # Method to generate a simple joint trajectory point for both arms in a "home" position
     def generate_home_trajectory(self, num_joints=7, steps=11, start=0.0, end=1.0):
+        '''Generate one joint trajectory point in the home position.'''
+
         point = TrajectoryPoint()
         point.time_from_start = Duration(sec=1, nanosec=0)
         point.positions = [0.0] * num_joints
         point.velocities = [0.0] * num_joints
         return point
 
-    # Method to generate a simple joint trajectory point for the waist_arm (6 joints for legged/waist_arm)
-    # num_joints represent the number of joints to use 
+
     def generate_waist_trajectory(self, num_joints=6):
-        """Simple waist_arm joint trajectory point (6 joints for legged/waist_arm)."""
+        '''Generate one joint trajectory point for the waist arm.'''
 
         point = TrajectoryPoint()
         point.time_from_start = Duration(sec=1, nanosec=0)
@@ -129,26 +133,41 @@ class TrajectoryPublisher(Node):
 
         return point
 
+
     def publish_left_arm_trajectory(self):
+        '''Publish the offline joint trajectory command for the left arm.'''
+
+        # Initialize a msg with type OfflineMotionCommand
         msg = OfflineMotionCommand()
+        # Uses a constant (JOINT_TRAJECTORY) from the interface to define the msg type
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
+        # Left: 0, Right: 1
         msg.target_arm_indices = [0]
         msg.async_trajectory = [self.generate_trajectory(0)]
         msg.reference_frame = "world"
         msg.command_id = 1
+        # self.get_clock().now() returns a ROS 2 Time object
+        # to_msg() is a method from the rclpy library
+        # It onverts it to a ROS 2 Time message (builtin_interfaces/Time)
         msg.stamp = self.get_clock().now().to_msg()
 
+        # Publish is a method from the rclpy Publisher class, it sends the message to the topic
         self.publisher.publish(msg)
 
+        # Some prints and logs for the user 
         print(msg.async_trajectory)
         print(len(msg.async_trajectory))
-
         self.get_logger().info("Publish LEFT arm trajectory")
 
+        # Set the sent_left flag to True, indicating that the left arm trajectory has been sent
         self.sent_left = True
+        # Method defined below 
         self.maybe_destroy_timers()
 
+
     def publish_right_arm_trajectory(self):
+        '''Publish the offline joint trajectory command for the right arm.'''
+
         msg = OfflineMotionCommand()
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
         msg.target_arm_indices = [1]
@@ -161,26 +180,21 @@ class TrajectoryPublisher(Node):
 
         print(msg.async_trajectory)
         print(len(msg.async_trajectory))
-
         self.get_logger().info("Publish RIGHT arm trajectory")
 
         self.sent_right = True
         self.maybe_destroy_timers()
 
+
     def publish_waist_arm_trajectory(self):
-        """Publish a simple offline joint trajectory command for waist_arm."""
+        '''Publish the offline joint trajectory command for the waist arm.'''
 
         msg = OfflineMotionCommand()
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
-
         # waist_arm index is 2 in SystemStateMachine / RobotData
         msg.target_arm_indices = [2]
-
         # For legged/waist_arm, send 6 joints as a test trajectory
-        msg.async_trajectory = [
-            self.generate_waist_trajectory(num_joints=6)
-        ]
-
+        msg.async_trajectory = [self.generate_waist_trajectory(num_joints=6)]
         msg.reference_frame = "world"
         msg.command_id = 7
         msg.stamp = self.get_clock().now().to_msg()
@@ -189,19 +203,22 @@ class TrajectoryPublisher(Node):
 
         print(msg.async_trajectory)
         print(len(msg.async_trajectory))
-
         self.get_logger().info("Publish WAIST arm trajectory")
 
         self.sent_waist = True
         self.maybe_destroy_timers()
 
+
     def maybe_destroy_timers(self):
-        """Cancel timers once all configured commands have been sent, independent of order."""
+        '''Cancel all timers after the three scheduled commands are sent.'''
 
         if self.sent_right and self.sent_left and self.sent_waist:
             self.destroy_timers()
 
+
     def publish_sync_trajectory(self):
+        '''Publish a synchronized offline trajectory command for both arms.'''
+
         msg = OfflineMotionCommand()
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
         msg.sync_arm_indices = [0, 1]
@@ -221,7 +238,10 @@ class TrajectoryPublisher(Node):
             "Publish LEFT and RIGHT arm sync trajectory"
         )
 
+
     def publish_home_trajectory(self):
+        '''Publish separate home-position trajectory commands for both arms.'''
+
         msg = OfflineMotionCommand()
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
         msg.target_arm_indices = [0, 1]
@@ -241,7 +261,10 @@ class TrajectoryPublisher(Node):
             "Publish LEFT and RIGHT arm home trajectory"
         )
 
+
     def publish_sync_home_trajectory(self):
+        '''Publish a synchronized home-position command for both arms.'''
+
         msg = OfflineMotionCommand()
         msg.type = OfflineMotionCommand.JOINT_TRAJECTORY
         msg.sync_arm_indices = [0, 1]
@@ -261,21 +284,22 @@ class TrajectoryPublisher(Node):
             "Publish LEFT and RIGHT arm home trajectory"
         )
 
+
     def destroy_timers(self):
-        """Clean up all timers"""
+        '''Cancel the left-arm, right-arm, and waist timers.'''
 
         self.timer_left.cancel()
         self.timer_right.cancel()
         self.timer_waist.cancel()
 
 
+# --------------------------- MAIN FUNCTION ---------------------------
 def main(args=None):
+
+    '''Initialize ROS 2, run the trajectory publisher, and shut it down.'''
     rclpy.init(args=args)
-
     node = TrajectoryPublisher()
-
     rclpy.spin(node)
-
     node.destroy_node()
     rclpy.shutdown()
 
