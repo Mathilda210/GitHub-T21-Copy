@@ -18,10 +18,59 @@ How to run
    d) Loop forever: publish circle waypoints; Ctrl+C to stop.
 
 Examples::
-    - With default arguments: 
-            --> python3 test_dual_arm_cartesian_circle.py
-   - With specified arguments:
-            --> python3 test_dual_arm_cartesian_circle.py --command-id 5000 --left-start-pose 0.22 0.32 -0.005 0.69 0.14 -0.69 -0.14
+    python3 test_dual_arm_cartesian_circle.py
+    python3 test_dual_arm_cartesian_circle.py --command-id 5000 --left-start-pose 0.22 0.32 -0.005 0.69 0.14 -0.69 -0.14
+
+Command-line arguments
+----------------------
+Motion and circle parameters:
+    --left-start-pose X Y Z QW QX QY QZ
+        Initial Cartesian pose of the left arm. Default: 0.222486 0.318404
+        -0.004878 0.693407 0.140458 -0.692657 -0.140306.
+    --radius RADIUS
+        Circle radius in meters. Default: 0.1.
+    --dwell-before-circle SECONDS
+        Time to wait at the start pose before tracing the circle. Default: 10.0.
+    --points-per-rev COUNT
+        Number of waypoints used for one revolution. Default: 300.
+    --waypoint-interval SECONDS
+        Time between two successive waypoints. Default: 0.02.
+
+Pose-demo parameters:
+    --pose-demo-name NAME
+        Name of the pose demo called before the circle. Default: go_home.
+    --pose-demo-command-id ID
+        Command ID sent to the pose-demo service. Default: 42.
+    --pose-demo-speed-scale SCALE
+        Speed multiplier for the pose demo. Default: 0.8.
+    --pose-demo-repeat-count COUNT
+        Number of times to repeat the pose demo. Default: 1.
+    --pose-demo-timeout-sec SECONDS
+        Execution timeout sent to the pose-demo service. Default: 120.0.
+    --pose-demo-wait-service-timeout SECONDS
+        Time to wait for /external/pose_demo to become available. Default: 10.0.
+    --skip-pose-demo
+        Do not call the go_home pose demo. Intended for debugging only.
+
+Motion-command parameters:
+    --reference-frame FRAME
+        Reference frame used for Cartesian poses. Default: world_frame.
+    --command-id ID
+        First command ID for Cartesian motion. It increases after each command.
+        Default: 4000.
+    --max-velocity VALUE
+        Maximum velocity constraint for both arms. Default: 0.3.
+    --max-acceleration VALUE
+        Maximum acceleration constraint for both arms. Default: 0.6.
+    --max-jerk VALUE
+        Maximum jerk constraint for both arms. Default: 5.0.
+    --pos-tolerance VALUE
+        Allowed position tolerance. Default: 0.0.
+    --vel-tolerance VALUE
+        Allowed velocity tolerance. Default: 0.0.
+
+The script validates the pose length, radius, timing values, waypoint count,
+motion constraints, and pose-demo parameters before starting ROS 2.
 """
 
 
@@ -105,7 +154,14 @@ def circle_pose_left(
     # radius is the radius of the circle.
     radius: float,
 ) -> List[float]:
-    """Left-arm waypoint on zy-plane circle; fixed x and quaternion."""
+    """Return the left-arm waypoint on the zy-plane circle with a given angle and known circle parameters. \n
+    The argumenst are: \n
+    - theta (target angle)
+    - x0, y0, z0 (center of the circle), \n
+    - qw, qx, qy, qz (orientation quaternion of the hand effector), \n
+    - radius (circle radius) \n
+    The function computes the y and z coordinates of the waypoint on the circle.
+    The other parameters (x0, qw, qx, qy, qz) are fixed for the circle motion."""
 
     # Center chosen so theta=0 lands on (y0, z0)
     # y(0)=y0, z(0)=z0
@@ -129,7 +185,12 @@ def circle_pose_right(
     qz: float,
     radius: float,
 ) -> List[float]:
-    """Right-arm waypoint on zy-plane circle; fixed x and quaternion."""
+    """Return the right-arm waypoint on the zy-plane circle by mirroring the left arm.
+    The argumenst are: \n
+        - theta (target angle)
+        - x0, y0, z0 (center of the circle), \n
+        - qw, qx, qy, qz (orientation quaternion of the hand effector), \n
+        - radius (circle radius)"""
     return mirror_pose_xz(
         circle_pose_left(
             theta,
@@ -179,7 +240,7 @@ class DualArmCirclePublisher(Node):
 
 
     def call_go_home_pose_demo(self) -> bool:
-        """Blocking call to /external/pose_demo; must return success before Cartesian motion."""
+        """Call the service /external/pose_demo to set the robot in home position; must return success before Cartesian motion."""
 
         # Wait up to the configured timeout for /external/pose_demo. 
         # If it does not appear, log an error and stop the homing step.
@@ -349,32 +410,12 @@ class DualArmCirclePublisher(Node):
 
 
 
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    #HERE
     def run(self) -> None:
+        '''Run the dual-arm Cartesian circle demo. First in the home position, then move to the start pose,
+          and finally trace the circle.'''
         # Phase 1: homing via pose demo (must succeed before any Cartesian command)
         if not self._args.skip_pose_demo:
+            # Call the go_home pose demo service to move the robot to its home position
             if not self.call_go_home_pose_demo():
                 raise RuntimeError(
                     "PoseDemo go_home failed or returned success=false"
@@ -384,7 +425,9 @@ class DualArmCirclePublisher(Node):
                 "Skipping /external/pose_demo (--skip-pose-demo)"
             )
 
+        # Get the orientation quaternion from the left start pose
         qw, qx, qy, qz = self.orientation
+        # Compute the right arm's start pose by mirroring the left arm's start pose about the xz plane
         right_start = mirror_pose_xz(self._left_start)
 
         # Phase 2: move both arms to circle start poses (theta = 0)
@@ -413,6 +456,7 @@ class DualArmCirclePublisher(Node):
 
         time.sleep(dwell)
 
+        # Get the number of waypoints per revolution from the command line arguments
         n_points = int(self._args.points_per_rev)
 
         if n_points < 3:
@@ -420,9 +464,11 @@ class DualArmCirclePublisher(Node):
                 "--points-per-rev must be >= 3"
             )
 
+        # Get the circle radius and waypoint interval from the command line arguments
         radius = float(self._args.radius)
         interval = float(self._args.waypoint_interval)
 
+        # Initialize the revolution counter and waypoint index within the current revolution
         rev = 0
         wp_in_rev = 0
 
@@ -436,6 +482,7 @@ class DualArmCirclePublisher(Node):
         try:
             while rclpy.ok():
 
+                # Updates the revolution counter and waypoint index within the current revolution
                 if wp_in_rev >= n_points:
                     rev += 1
                     wp_in_rev = 0
@@ -449,6 +496,7 @@ class DualArmCirclePublisher(Node):
                     2.0 * math.pi * wp_in_rev
                 ) / n_points
 
+                # Compute the next waypoint for the left arm.
                 left_pose = circle_pose_left(
                     theta,
                     self.x0,
@@ -461,6 +509,7 @@ class DualArmCirclePublisher(Node):
                     radius,
                 )
 
+                # Compute the next waypoint for the right arm by mirroring the left arm's waypoint
                 right_pose = circle_pose_right(
                     theta,
                     self.x0,
@@ -504,6 +553,10 @@ class DualArmCirclePublisher(Node):
             )
 
 
+
+
+
+# --------------------------- ARGUMENT PARSING ---------------------------
 def _parse_pose7(
     values: Sequence[float],
     arg_name: str,
