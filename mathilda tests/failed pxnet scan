@@ -1,0 +1,103 @@
+user@ms-1826:~$ sudo pxnet-scan "WIFI" "Wifi_pwd"
+	freq: 5220
+	signal: -55.00 dBm
+	SSID: MMM-SRC-GUEST
+	freq: 5220
+	signal: -55.00 dBm
+	SSID: Surgical Robotic Center
+	freq: 5220
+	signal: -55.00 dBm
+	SSID: SUMAN-DEV-WIFi
+	freq: 2462
+	signal: -59.00 dBm
+	SSID: MMM-SRC-GUEST
+	freq: 2462
+	signal: -59.00 dBm
+	SSID: SUMAN-DEV-WIFi
+	freq: 2462
+	signal: -59.00 dBm
+	SSID: Surgical Robotic Center
+	freq: 2437
+	signal: -76.00 dBm
+	SSID: Surgical Robotic Center
+	freq: 2412
+	signal: -70.00 dBm
+	SSID: Livebox-7300
+	freq: 2462
+	signal: -58.00 dBm
+	SSID: 
+	freq: 2462
+	signal: -59.00 dBm
+	SSID: 
+	freq: 2462
+	signal: -58.00 dBm
+	SSID: 
+	freq: 2462
+	signal: -59.00 dBm
+	SSID: 
+	freq: 2462
+	signal: -58.00 dBm
+	SSID: 
+network={
+	ssid="SUMAN-DEV-WIFI"
+	#psk="Eternit-Walrus3Virtual-Phonyk-Exclusiv"
+	psk=b48f7f4b2674d402f5762a48b02067ee7bd956d643a89e95104fe639f378ad45
+}
+Successfully initialized wpa_supplicant
+WLAN is OK
+Internet Systems Consortium DHCP Client 4.4.1
+Copyright 2004-2018 Internet Systems Consortium.
+All rights reserved.
+For info, please visit https://www.isc.org/software/dhcp/
+
+Listening on LPF/wlan0/5c:ba:75:4e:fc:c9
+Sending on   LPF/wlan0/5c:ba:75:4e:fc:c9
+Sending on   Socket/fallback
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 3 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 3 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 3 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 4 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 5 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 5 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 12 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 19 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 7 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 12 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 10 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 9 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 11 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 10 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 8 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 12 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 7 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 13 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 15 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 8 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 13 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 9 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 18 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 14 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 9 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 15 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 7 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 11 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 7 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 13 (xid=0x34e68512)
+DHCPDISCOVER on wlan0 to 255.255.255.255 port 67 interval 9 (xid=0x34e68512)
+No DHCPOFFERS received.
+Trying recorded lease 10.0.36.152
+PING 10.0.36.1 (10.0.36.1) 56(84) bytes of data.
+
+--- 10.0.36.1 ping statistics ---
+1 packets transmitted, 0 received, +1 errors, 100% packet loss, time 0ms
+
+Trying recorded lease 10.0.36.76
+PING 10.0.36.1 (10.0.36.1) 56(84) bytes of data.
+
+--- 10.0.36.1 ping statistics ---
+1 packets transmitted, 0 received, +1 errors, 100% packet loss, time 0ms
+
+bound: immediate renewal.
+DHCPREQUEST for 10.0.36.76 on wlan0 to 255.255.255.255 port 67 (xid=0x1285e634)
+WLAN-DHCP is OK
+Not connected.
