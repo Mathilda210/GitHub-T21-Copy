@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
-"""Repeat the saved pick, lift, release, and return sequence."""
+"""V1 - Repeat the saved pick, lift, release, and return sequence."""
+"""SUMAN est positionné devant sa boite de rangement, la piece en metal est dispoé 
+avec la poignée dans le vide et le reste de l'outil sur la table.
+IL prend l'outil le leve et le repose en boucle"""
 
 import argparse
 import os
@@ -45,6 +48,9 @@ TARGET_JOINT_GROUPS = {
 
 POSE_PAUSE_SECONDS = 2.0
 POSITION_TOLERANCE = 0.05
+HAND_CLOSE_POSITION_TOLERANCE = 0.1
+HAND_CLOSE_MIN_PROGRESS = 0.05
+HAND_CLOSE_STALL_SECONDS = 1.5
 VELOCITY_TOLERANCE = 0.01
 COMPARISON_EPSILON = 1e-9
 
@@ -153,6 +159,11 @@ class SumanPick(Node):
         self.next_action_time = time.monotonic()
         self.waiting_target: Optional[Dict[int, List[float]]] = None
         self.waiting_groups: List[int] = []
+        self.waiting_position_tolerance = POSITION_TOLERANCE
+        self._hand_close_initial_error: Optional[float] = None
+        self._hand_close_stall_since: Optional[float] = None
+        self._hand_close_progress_detected = False
+        self._hand_close_contact_detected = False
         self._joint_names = [
             joint_name
             for arm_index in self.arm_indices
@@ -211,29 +222,59 @@ class SumanPick(Node):
             return False, float("inf"), float("inf")
 
         max_position_error = 0.0
+        total_position_error = 0.0
         max_velocity = 0.0
         for arm_index in self.waiting_groups:
             for joint_name, target_position in zip(
                 TARGET_JOINT_GROUPS[arm_index],
                 self.waiting_target[arm_index],
             ):
-                max_position_error = max(
-                    max_position_error,
-                    abs(self._latest_positions[joint_name] - target_position),
+                position_error = abs(
+                    self._latest_positions[joint_name] - target_position
                 )
+                max_position_error = max(max_position_error, position_error)
+                total_position_error += position_error
                 max_velocity = max(
                     max_velocity,
                     abs(self._latest_velocities[joint_name]),
                 )
 
+        is_hand_close = self.steps[self.step_index][0] == "close hand"
+        if is_hand_close:
+            if self._hand_close_initial_error is None:
+                self._hand_close_initial_error = total_position_error
+            elif (
+                self._hand_close_initial_error - total_position_error
+                >= HAND_CLOSE_MIN_PROGRESS
+            ):
+                self._hand_close_progress_detected = True
+
         reached = (
-            max_position_error <= POSITION_TOLERANCE + COMPARISON_EPSILON
+            max_position_error
+            <= self.waiting_position_tolerance + COMPARISON_EPSILON
             and max_velocity <= VELOCITY_TOLERANCE + COMPARISON_EPSILON
         )
+        self._hand_close_contact_detected = False
+        if (
+            is_hand_close
+            and not reached
+            and self._hand_close_progress_detected
+            and max_velocity <= VELOCITY_TOLERANCE + COMPARISON_EPSILON
+        ):
+            now = time.monotonic()
+            if self._hand_close_stall_since is None:
+                self._hand_close_stall_since = now
+            elif now - self._hand_close_stall_since >= HAND_CLOSE_STALL_SECONDS:
+                self._hand_close_contact_detected = True
+                reached = True
+        elif is_hand_close and max_velocity > VELOCITY_TOLERANCE:
+            self._hand_close_stall_since = None
+
         if not reached:
             self._warn_feedback(
                 f"Waiting for target: position error {max_position_error:.4f}, "
-                f"velocity {max_velocity:.4f}."
+                f"velocity {max_velocity:.4f}, "
+                f"position tolerance {self.waiting_position_tolerance:.4f}."
             )
         return reached, max_position_error, max_velocity
 
@@ -245,10 +286,17 @@ class SumanPick(Node):
                 return
 
             step_name = self.steps[self.step_index][0]
-            self.get_logger().info(
-                f"Reached {step_name}: position error {position_error:.4f}, "
-                f"velocity {velocity:.4f}."
-            )
+            if self._hand_close_contact_detected:
+                self.get_logger().info(
+                    "Hand stopped short of the close target after moving; "
+                    f"treating it as a grasp (position error "
+                    f"{position_error:.4f}, velocity {velocity:.4f})."
+                )
+            else:
+                self.get_logger().info(
+                    f"Reached {step_name}: position error {position_error:.4f}, "
+                    f"velocity {velocity:.4f}."
+                )
             self.phase = "step_pause"
             self.next_action_time = now + POSE_PAUSE_SECONDS
             return
@@ -262,10 +310,28 @@ class SumanPick(Node):
 
         if self.phase == "send_step":
             step_name, target, group_indices = self.steps[self.step_index]
-            self._publish_target(target, group_indices)
-            self.get_logger().info(f"Moving to {step_name}.")
             self.waiting_target = target
             self.waiting_groups = group_indices
+            self.waiting_position_tolerance = (
+                HAND_CLOSE_POSITION_TOLERANCE
+                if step_name == "close hand"
+                else POSITION_TOLERANCE
+            )
+            self._hand_close_initial_error = None
+            self._hand_close_stall_since = None
+            self._hand_close_progress_detected = False
+            self._hand_close_contact_detected = False
+            if step_name == "close hand" and self._latest_positions is not None:
+                self._hand_close_initial_error = sum(
+                    abs(self._latest_positions[joint_name] - target_position)
+                    for arm_index in group_indices
+                    for joint_name, target_position in zip(
+                        TARGET_JOINT_GROUPS[arm_index],
+                        target[arm_index],
+                    )
+                )
+            self._publish_target(target, group_indices)
+            self.get_logger().info(f"Moving to {step_name}.")
             self.phase = "await_target"
 
     def _publish_target(
