@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 """Publish a sequence of joint positions for a pick-and-place task.
