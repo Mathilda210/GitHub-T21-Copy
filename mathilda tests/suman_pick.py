@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Move through the saved pick poses, then close the right hand."""
+"""Repeat the saved pick, lift, release, and return sequence."""
 
 import argparse
 import os
@@ -111,6 +111,10 @@ HAND_AROUND_OBJECT_POSE = {
     ],
 }
 
+LIFT_RIGHT_ARM = [
+    -0.445, -0.417, 0.422, -1.544, -0.460, 0.450, 0.258,
+]
+
 CLOSED_RIGHT_HAND = [
     1.3, 0.0, 0.0,
     1.3, 0.0, 0.0,
@@ -121,7 +125,7 @@ CLOSED_RIGHT_HAND = [
 
 
 class SumanPick(Node):
-    """Publish each saved pose and close the right hand without moving the arm."""
+    """Repeat the pick-and-release sequence until the node is interrupted."""
 
     def __init__(self, joint_state_topic: str):
         super().__init__("suman_pick")
@@ -131,15 +135,22 @@ class SumanPick(Node):
             10,
         )
         self.arm_indices = [0, 1, 2, 3, 4, 5]
-        self.poses = [
-            ("initial pose", INITIAL_POSE),
-            ("prepare hand", PREPARE_HAND_POSE),
-            ("hand around object", HAND_AROUND_OBJECT_POSE),
+        self.steps = [
+            ("initial pose", INITIAL_POSE, self.arm_indices),
+            ("prepare hand", PREPARE_HAND_POSE, self.arm_indices),
+            ("hand around object", HAND_AROUND_OBJECT_POSE, self.arm_indices),
+            ("close hand", {5: CLOSED_RIGHT_HAND}, [5]),
+            ("lift hand", {1: LIFT_RIGHT_ARM}, [1]),
+            (
+                "return to hand around object",
+                {1: HAND_AROUND_OBJECT_POSE[1]},
+                [1],
+            ),
+            ("open hand", {5: HAND_AROUND_OBJECT_POSE[5]}, [5]),
         ]
-        self.pose_index = 0
-        self.phase = "send_pose"
+        self.step_index = 0
+        self.phase = "send_step"
         self.next_action_time = time.monotonic()
-        self.finished = False
         self.waiting_target: Optional[Dict[int, List[float]]] = None
         self.waiting_groups: List[int] = []
         self._joint_names = [
@@ -233,47 +244,28 @@ class SumanPick(Node):
             if not reached:
                 return
 
-            if self.pose_index < len(self.poses):
-                pose_name = self.poses[self.pose_index][0]
-                self.get_logger().info(
-                    f"Reached {pose_name}: position error {position_error:.4f}, "
-                    f"velocity {velocity:.4f}."
-                )
-                self.phase = "pose_pause"
-                self.next_action_time = now + POSE_PAUSE_SECONDS
-            else:
-                self.get_logger().info("Right hand closed; pick sequence complete.")
-                self.finished = True
-                self.timer.cancel()
+            step_name = self.steps[self.step_index][0]
+            self.get_logger().info(
+                f"Reached {step_name}: position error {position_error:.4f}, "
+                f"velocity {velocity:.4f}."
+            )
+            self.phase = "step_pause"
+            self.next_action_time = now + POSE_PAUSE_SECONDS
             return
 
         if now + COMPARISON_EPSILON < self.next_action_time:
             return
 
-        if self.phase == "pose_pause":
-            self.pose_index += 1
-            if self.pose_index == len(self.poses):
-                self.phase = "close_hand"
-            else:
-                self.phase = "send_pose"
+        if self.phase == "step_pause":
+            self.step_index = (self.step_index + 1) % len(self.steps)
+            self.phase = "send_step"
 
-        if self.phase == "send_pose":
-            pose_name, target = self.poses[self.pose_index]
-            self._publish_target(target, self.arm_indices)
-            self.get_logger().info(f"Moving to {pose_name}.")
+        if self.phase == "send_step":
+            step_name, target, group_indices = self.steps[self.step_index]
+            self._publish_target(target, group_indices)
+            self.get_logger().info(f"Moving to {step_name}.")
             self.waiting_target = target
-            self.waiting_groups = self.arm_indices
-            self.phase = "await_target"
-            return
-
-        if self.phase == "close_hand":
-            hand_target = {5: CLOSED_RIGHT_HAND}
-            self._publish_target(hand_target, [5])
-            self.get_logger().info(
-                "Closing the right hand while keeping the arm at hand around object."
-            )
-            self.waiting_target = hand_target
-            self.waiting_groups = [5]
+            self.waiting_groups = group_indices
             self.phase = "await_target"
 
     def _publish_target(
@@ -337,7 +329,10 @@ class SumanPick(Node):
 
 def main(args=None) -> None:
     parser = argparse.ArgumentParser(
-        description="Move through the saved pick poses and close the right hand."
+        description=(
+            "Repeat the saved pick, lift, release, and return sequence "
+            "until interrupted."
+        )
     )
     default_robot_id = os.environ.get("ROBOT_ID", "ROBOT_10")
     parser.add_argument(
@@ -366,7 +361,7 @@ def main(args=None) -> None:
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
-        while rclpy.ok() and not node.finished:
+        while rclpy.ok():
             executor.spin_once(timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
