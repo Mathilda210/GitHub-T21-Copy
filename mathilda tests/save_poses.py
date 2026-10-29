@@ -18,33 +18,28 @@ prepare hand
 [INFO] [1793268454.938532032] [joint_state_reader]:   [left_hand] (15j): 0.010 0.000 0.000 0.019 0.000 0.000 0.005 0.000 0.000 0.018 0.000 0.000 0.000 0.001 0.004 rad
 [INFO] [1793268454.939023232] [joint_state_reader]:   [right_hand] (15j): 0.729 0.000 0.000 0.693 0.033 0.017 0.698 0.000 0.000 0.695 0.011 0.010 1.351 0.000 1.076 rad
 
+put prepared hand up 
 
-hand around object
-
-==== Joint State (#116804) ====
-[INFO] [1793269032.936621408] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
-[INFO] [1793269032.937208032] [joint_state_reader]:   [right_arm] (7j): -0.711 -0.282 0.618 -0.469 -0.054 0.578 -0.652 rad
-[INFO] [1793269032.937724160] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793269032.938227808] [joint_state_reader]:   [head_arm] (2j): -0.000 -0.001 rad
-[INFO] [1793269032.938744896] [joint_state_reader]:   [left_hand] (15j): 0.010 0.000 0.000 0.019 0.000 0.000 0.005 0.000 0.000 0.018 0.000 0.000 0.000 0.001 0.004 rad
-[INFO] [1793269032.939249952] [joint_state_reader]:   [right_hand] (15j): 0.727 0.002 0.004 0.685 0.048 0.023 0.698 0.002 0.002 0.694 0.020 0.013 1.351 0.000 1.076 rad
-
-
---> close hand 
+==== Joint State (#744) ====
+[INFO] [1793284109.071816224] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793284109.072298912] [joint_state_reader]:   [right_arm] (7j): -0.286 -0.546 0.034 -1.961 0.767 1.115 0.408 rad
+[INFO] [1793284109.072809472] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793284109.073279648] [joint_state_reader]:   [head_arm] (2j): 0.000 -0.000 rad
+[INFO] [1793284109.073748448] [joint_state_reader]:   [left_hand] (15j): 0.007 0.000 0.000 0.009 0.000 0.000 0.005 0.000 0.000 0.002 0.000 0.000 0.003 0.000 0.001 rad
+[INFO] [1793284109.074204896] [joint_state_reader]:   [right_hand] (15j): 0.761 0.004 0.000 0.693 0.023 0.012 0.698 0.000 0.000 0.692 0.011 0.006 1.349 0.000 1.079 rad
 
 
-leve la main
+place hand above table 
 
-==== Joint State (#800) ====
-[INFO] [1793271761.722208512] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 -0.000 0.000 0.000 rad
-[INFO] [1793271761.722726912] [joint_state_reader]:   [right_arm] (7j): -0.445 -0.417 0.422 -1.544 -0.460 0.450 0.258 rad
-[INFO] [1793271761.723270304] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793271761.723764160] [joint_state_reader]:   [head_arm] (2j): 0.000 -0.002 rad
-[INFO] [1793271761.724261952] [joint_state_reader]:   [left_hand] (15j): 0.010 0.000 0.000 0.014 0.000 0.000 0.005 0.000 0.000 0.013 0.000 0.000 0.000 0.001 0.004 rad
-[INFO] [1793271761.724729664] [joint_state_reader]:   [right_hand] (15j): 1.324 0.000 0.000 1.281 0.056 0.029 1.289 0.024 0.016 1.300 0.004 0.004 1.564 0.599 0.951 rad
+=== Joint State (#92747) ====
+[INFO] [1793284569.072034112] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793284569.072548224] [joint_state_reader]:   [right_arm] (7j): -1.167 -0.114 0.508 -0.427 1.069 0.637 0.123 rad
+[INFO] [1793284569.073090016] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793284569.073534816] [joint_state_reader]:   [head_arm] (2j): 0.000 -0.000 rad
+[INFO] [1793284569.074028960] [joint_state_reader]:   [left_hand] (15j): 0.007 0.000 0.000 0.009 0.000 0.000 0.005 0.000 0.000 0.002 0.000 0.000 0.003 0.000 0.001 rad
+[INFO] [1793284569.074467776] [joint_state_reader]:   [right_hand] (15j): 0.791 0.000 0.004 0.694 0.028 0.015 0.698 0.000 0.000 0.692 0.006 0.006 1.349 0.059 1.079 rad
 
 
---> retour à la pose "hand around object"
-
---> ouvre la main pour lacher l'object
-
+--> close hand
+--> wait 3s
+--> open hand
