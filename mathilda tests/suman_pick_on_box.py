@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """Repeat Suman's saved pick, close, wait, and open sequence.
-Meme pick and place que Paxini mais en position debout ??? 
+Prend sur boite, test pour prendre une pince a plat mais peu concluant
 
 A tester"""
 

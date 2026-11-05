@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 """Move the right hand through a selected laparoscopic instrument grasp."""
