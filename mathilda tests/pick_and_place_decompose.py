@@ -1,7 +1,13 @@
 
 #!/usr/bin/env python3
 
-"""Publish a sequence of joint positions for a pick-and-place task.
+"""
+___________________________________
+Script pick and place de Paxini mais avec des pauses pour 
+decomposer le mouvement 
+___________________________________
+
+Publish a sequence of joint positions for a pick-and-place task.
 
 The node sends trajectory commands to the controller and monitors ``JointState``
 feedback to advance through targets, optionally replay the sequence in reverse,

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
-"""Repeat Suman's saved pick, close, wait, and open sequence."""
+"""Repeat Suman's saved pick, close, wait, and open sequence.
+Meme pick and place que Paxini mais en position debout ??? 
+
+A tester"""
 
 import argparse
 import os

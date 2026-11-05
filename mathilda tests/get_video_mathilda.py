@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+-------------------------------------------------------
+Test pour recuperer les images cameras et les sauvegarder en video mp4 (db3 + metadata)
+Fonctionne mais fichier lourd et commande directe plus simple.
+-----------------------------------------------------
+
+
+
 ROS 2 Video Ring Buffer Node
 
 Description:

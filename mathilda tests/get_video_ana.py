@@ -1,3 +1,7 @@
+"""Petit script partagé par ana pour tenter de recupérer 
+les données caméras comme elle fait avec sa realsense directement
+--> echec"""
+
 import pyrealsense2 as rs
 import time
  

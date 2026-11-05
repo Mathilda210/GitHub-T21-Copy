@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Open both T21 hands, close them, pause, and open them again.
+"""
+_________________________
+SCRIPT NON TESTE
+_________________________
+
+
+
+Open both T21 hands, close them, pause, and open them again.
 
 The hand targets and joint order below follow the existing
 ``other scripts/pick_and_place.py`` example. Run this from a ROS 2 environment
