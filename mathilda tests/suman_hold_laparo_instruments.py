@@ -25,6 +25,7 @@ RIGHT_HAND_JOINTS = [
     for finger in ("index", "middle", "ring", "pinky", "thumb")
     for index in range(3)
 ]
+HOME_HAND_POSE = [0.0] * len(RIGHT_HAND_JOINTS)
 
 POSE_PAUSE_SECONDS = 2.0
 POSITION_TOLERANCE = 0.1
@@ -138,6 +139,7 @@ class SumanLaparoHold(Node):
         )
         self.steps = INSTRUMENTS[instrument]
         self.instrument = instrument
+        self.home_reset = False
         self.step_index = 0
         self.phase = "send_step"
         self.next_action_time = time.monotonic()
@@ -162,6 +164,26 @@ class SumanLaparoHold(Node):
             f"Joint-state feedback: {joint_state_topic}; "
             f"selected instrument: {instrument}."
         )
+
+    def start_instrument(self, instrument: str) -> None:
+        self.instrument = instrument
+        self.steps = INSTRUMENTS[instrument]
+        self.home_reset = False
+        self.step_index = 0
+        self.phase = "send_step"
+        self.next_action_time = time.monotonic()
+        self.waiting_target = None
+
+    def start_home_reset(self) -> None:
+        self.steps = [
+            ("retour a la position initiale (doigts ouverts)", HOME_HAND_POSE)
+        ]
+        self.home_reset = True
+        self.step_index = 0
+        self.phase = "send_step"
+        self.next_action_time = time.monotonic()
+        self.waiting_target = None
+        self.get_logger().info("Returning the right hand to its open home position.")
 
     def _joint_state_callback(self, msg: JointState) -> None:
         if len(msg.name) != len(msg.position) or len(msg.name) != len(msg.velocity):
@@ -226,6 +248,7 @@ class SumanLaparoHold(Node):
         self._hand_close_contact_detected = False
         if (
             not reached
+            and not self.home_reset
             and self._hand_close_progress_detected
             and max_velocity <= VELOCITY_TOLERANCE + COMPARISON_EPSILON
         ):
@@ -278,10 +301,15 @@ class SumanLaparoHold(Node):
             self.step_index += 1
             if self.step_index >= len(self.steps):
                 self.phase = "done"
-                self.get_logger().info(
-                    f"{self.instrument.capitalize()} is held in the final pose. "
-                    "No further motion will be sent."
-                )
+                if self.home_reset:
+                    self.get_logger().info(
+                        "The right hand reached its open home position."
+                    )
+                else:
+                    self.get_logger().info(
+                        f"{self.instrument.capitalize()} is held in the final pose. "
+                        "No further motion will be sent."
+                    )
                 return
             self.phase = "send_step"
 
@@ -347,6 +375,19 @@ def _choose_instrument() -> Optional[str]:
         print("Choix invalide. Entrez 1, 2, 3 ou q.")
 
 
+def _confirm_instrument_ready(instrument: str) -> bool:
+    print(
+        f"\nInstrument choisi : {instrument}.\n"
+        "Placez l'instrument dans la main droite et degagez la zone autour "
+        "de la main."
+    )
+    try:
+        return input("Pret ? [Entree/q] : ").strip().lower() not in ("q", "quitter")
+    except EOFError:
+        print("\nAucune confirmation recue ; lancement annule.")
+        return False
+
+
 def main(args=None) -> None:
     parser = argparse.ArgumentParser(
         description="Saisir un instrument laparo avec une pose mesuree."
@@ -371,20 +412,11 @@ def main(args=None) -> None:
         print("Lancement annule.")
         return
 
-    print(
-        f"\nInstrument choisi : {instrument}.\n"
-        "Consignes : placez l'instrument dans la main droite, degagez la zone "
-        "autour de la main, puis appuyez sur Entree pour commencer. "
-        "Appuyez sur Ctrl+C pour arreter."
-    )
-    try:
-        if input("Pret ? [Entree/q] : ").strip().lower() in ("q", "quitter"):
-            print("Lancement annule.")
-            return
-    except EOFError:
-        print("\nAucune confirmation recue ; lancement annule.")
+    if not _confirm_instrument_ready(instrument):
+        print("Lancement annule.")
         return
 
+    print("Appuyez sur Ctrl+C pour arreter.")
     joint_state_topic = (
         parsed_args.joint_state_topic.strip()
         or f"/{parsed_args.robot_id}/mc/pr10_joint_states_topic"
@@ -399,6 +431,32 @@ def main(args=None) -> None:
     try:
         while rclpy.ok():
             executor.spin_once(timeout_sec=0.1)
+            if node.phase != "done":
+                continue
+
+            if node.home_reset:
+                instrument = _choose_instrument()
+                if instrument is None:
+                    break
+                if not _confirm_instrument_ready(instrument):
+                    print("Arret du test.")
+                    break
+                node.start_instrument(instrument)
+                continue
+
+            try:
+                response = input(
+                    "\nSequence terminee. Reprenez l'outil, puis appuyez sur "
+                    "Entree pour ouvrir la main et revenir a la position "
+                    "initiale [Entree/q] : "
+                ).strip().lower()
+            except EOFError:
+                print("\nAucune saisie disponible ; arret du test.")
+                break
+
+            if response in ("q", "quitter"):
+                break
+            node.start_home_reset()
     except KeyboardInterrupt:
         pass
     finally:
