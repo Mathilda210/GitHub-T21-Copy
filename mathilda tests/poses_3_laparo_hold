@@ -26,61 +26,59 @@ Position pouce refermé et index replié decu
 
 Ciseaux
 
-Position enfillage des ciseaux: tous les doigts a moitie rabattus sauf l'annulaire 
+Position enfillage des ciseaux: entre pouce et index
 
-==== Joint State (#330813) ====
-[INFO] [1793888367.926581120] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793888367.927083360] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793888367.927580160] [joint_state_reader]:   [waist_arm] (10j): 0.000 -0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793888367.928039520] [joint_state_reader]:   [head_arm] (2j): -0.001 0.000 rad
-[INFO] [1793888367.928567232] [joint_state_reader]:   [left_hand] (15j): 0.007 0.004 0.000 0.012 0.000 0.000 0.006 0.003 0.000 0.009 0.000 0.000 0.000 0.002 0.002 rad
-[INFO] [1793888367.929037984] [joint_state_reader]:   [right_hand] (15j): 1.086 0.000 0.004 1.175 0.019 0.012 0.022 0.000 0.003 1.082 0.016 0.010 1.564 0.637 0.321 rad
+==== Joint State (#1145) ====
+[INFO] [1793971038.392708416] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971038.393203040] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971038.393673568] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971038.394165696] [joint_state_reader]:   [head_arm] (2j): -0.000 0.000 rad
+[INFO] [1793971038.394644000] [joint_state_reader]:   [left_hand] (15j): 0.012 0.000 0.000 0.014 0.000 0.000 0.004 0.000 0.000 0.008 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971038.395123232] [joint_state_reader]:   [right_hand] (15j): 0.003 0.000 0.000 1.221 0.017 0.007 0.016 0.003 0.001 0.000 0.000 0.000 1.623 0.757 0.000 rad
 
 
-Doigts resserés sur les ciseaux (toujours sauf l'annulaire)
+Doigts resserés sur les ciseaux 
 
-==== Joint State (#356414) ====
-[INFO] [1793888495.926386976] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793888495.926895392] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793888495.927354368] [joint_state_reader]:   [waist_arm] (10j): 0.000 -0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793888495.927843168] [joint_state_reader]:   [head_arm] (2j): -0.001 0.000 rad
-[INFO] [1793888495.928295136] [joint_state_reader]:   [left_hand] (15j): 0.007 0.004 0.000 0.012 0.000 0.000 0.006 0.003 0.000 0.009 0.000 0.000 0.000 0.002 0.002 rad
-[INFO] [1793888495.928775488] [joint_state_reader]:   [right_hand] (15j): 1.210 0.004 0.004 1.172 0.129 0.071 0.022 0.000 0.003 1.114 0.137 0.078 1.564 0.637 0.321 rad
+==== Joint State (#26746) ====
+[INFO] [1793971166.392619616] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971166.393157056] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971166.393622464] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971166.394061152] [joint_state_reader]:   [head_arm] (2j): -0.000 0.000 rad
+[INFO] [1793971166.394503520] [joint_state_reader]:   [left_hand] (15j): 0.012 0.000 0.000 0.014 0.000 0.000 0.004 0.000 0.000 0.008 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971166.395031648] [joint_state_reader]:   [right_hand] (15j): 0.003 0.000 0.000 1.193 0.201 0.113 0.016 0.003 0.001 0.000 0.000 0.000 1.623 0.978 0.000 rad
+
+
+Ajout doigts support: index
+
+==== Joint State (#41147) ====
+[INFO] [1793971238.392648832] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971238.393166880] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793971238.393649664] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971238.394166752] [joint_state_reader]:   [head_arm] (2j): -0.000 0.000 rad
+[INFO] [1793971238.394653088] [joint_state_reader]:   [left_hand] (15j): 0.012 0.000 0.000 0.014 0.000 0.000 0.004 0.000 0.000 0.008 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793971238.395155264] [joint_state_reader]:   [right_hand] (15j): 1.037 0.247 0.146 1.265 0.103 0.057 0.016 0.003 0.001 0.000 0.000 0.000 1.623 0.924 0.000 rad
 
 
 
 Petite pince
 
-Position doigts à moitié pliés sauf petit doigt 
+Position pouce replié 
 
-=== Joint State (#785231) ====
-[INFO] [1793890639.926631008] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890639.927226208] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890639.927765216] [joint_state_reader]:   [waist_arm] (10j): 0.000 -0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793890639.928232064] [joint_state_reader]:   [head_arm] (2j): -0.001 0.000 rad
-[INFO] [1793890639.928707808] [joint_state_reader]:   [left_hand] (15j): 0.007 0.004 0.000 0.012 0.000 0.000 0.006 0.003 0.000 0.009 0.000 0.000 0.000 0.002 0.002 rad
-[INFO] [1793890639.929184544] [joint_state_reader]:   [right_hand] (15j): 1.318 0.001 0.000 1.336 0.027 0.015 1.344 0.004 0.002 0.004 0.006 0.005 1.371 0.013 0.026 rad
+=== Joint State (#206353) ====
+[INFO] [1793972064.392480352] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793972064.392941152] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793972064.393377824] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793972064.393974784] [joint_state_reader]:   [head_arm] (2j): -0.000 0.000 rad
+[INFO] [1793972064.394444640] [joint_state_reader]:   [left_hand] (15j): 0.012 0.000 0.000 0.014 0.000 0.000 0.004 0.000 0.000 0.008 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793972064.394940032] [joint_state_reader]:   [right_hand] (15j): 0.028 0.000 0.000 0.003 0.002 0.002 0.014 0.000 0.003 0.004 0.002 0.005 1.675 1.080 1.830 rad
 
+Ajout petit doigt et annulaire pour support 
 
-Position doigts refermés sauf pouce et petit doigts 
+==== Joint State (#225554) ====
+[INFO] [1793972160.392478368] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793972160.392999200] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 0.000 rad
+[INFO] [1793972160.393457376] [joint_state_reader]:   [waist_arm] (10j): 0.000 0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793972160.393935968] [joint_state_reader]:   [head_arm] (2j): -0.000 0.000 rad
+[INFO] [1793972160.394376960] [joint_state_reader]:   [left_hand] (15j): 0.012 0.000 0.000 0.014 0.000 0.000 0.004 0.000 0.000 0.008 0.000 0.000 0.000 0.000 0.000 rad
+[INFO] [1793972160.394826720] [joint_state_reader]:   [right_hand] (15j): 0.028 0.000 0.000 0.003 0.002 0.002 1.392 1.208 1.075 1.292 1.161 1.016 1.675 1.086 1.830 rad
 
-=== Joint State (#812432) ====
-[INFO] [1793890775.926403584] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890775.926904416] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890775.927346272] [joint_state_reader]:   [waist_arm] (10j): 0.000 -0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793890775.927804416] [joint_state_reader]:   [head_arm] (2j): -0.001 0.000 rad
-[INFO] [1793890775.928259232] [joint_state_reader]:   [left_hand] (15j): 0.007 0.004 0.000 0.012 0.000 0.000 0.006 0.003 0.000 0.009 0.000 0.000 0.000 0.002 0.002 rad
-[INFO] [1793890775.928711424] [joint_state_reader]:   [right_hand] (15j): 1.393 0.729 0.536 1.391 0.626 0.436 1.392 0.511 0.341 0.004 0.006 0.005 1.371 0.013 0.026 rad
-
-Position pouce refermé en plus
-
-=== Joint State (#847233) ====
-[INFO] [1793890949.926586240] [joint_state_reader]:   [left_arm] (7j): 0.000 0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890949.927082016] [joint_state_reader]:   [right_arm] (7j): 0.000 -0.400 0.000 -1.570 0.000 0.000 -0.000 rad
-[INFO] [1793890949.927636672] [joint_state_reader]:   [waist_arm] (10j): 0.000 -0.000 -0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 rad
-[INFO] [1793890949.928084608] [joint_state_reader]:   [head_arm] (2j): -0.001 0.000 rad
-[INFO] [1793890949.928598048] [joint_state_reader]:   [left_hand] (15j): 0.007 0.004 0.000 0.012 0.000 0.000 0.006 0.003 0.000 0.009 0.000 0.000 0.000 0.002 0.002 rad
-[INFO] [1793890949.929071296] [joint_state_reader]:   [right_hand] (15j): 1.392 0.940 0.756 1.391 0.662 0.467 1.392 0.511 0.341 0.026 0.000 0.005 1.371 0.789 1.324 rad
-
-
---> bancal mais ça ira pour un premier test
