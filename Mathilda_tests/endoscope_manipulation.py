@@ -1,7 +1,30 @@
 
 #!/usr/bin/env python3
 
-"""Grasp the endoscope, publish its frame, and offer confirmed translations."""
+"""Interactive ROS 2 demo to grasp and move an endoscope with the right arm.
+
+The script closes the right hand around the endoscope, publishes its tool frame,
+then lets the operator select a +10 cm translation on X, Y, or Z. Each outward
+move and each return to the captured starting pose requires a separate
+confirmation. The script uses JointState and arm-TF feedback to monitor motion.
+
+Run on the robot computer from a Bash shell with ROS 2 Humble and the Paxini
+message workspace installed. Ensure the robot is in a state that accepts motion
+commands, the ROS domain matches the robot, and the work area is clear.
+
+Example (run from the repository root; adjust the message-workspace path and
+robot ID to match your installation):
+
+    source /opt/ros/humble/setup.bash
+    source ~/px_robot_code/paxini_ros2_msgs-1.0.1-99ad226/install/setup.bash
+    export ROBOT_ID=ROBOT_10
+    python3 Mathilda_tests/endoscope_manipulation.py
+
+ROBOT_ID defaults to ROBOT_10. Use --robot-id, --joint-state-topic, or
+--arm-tf-topic to select different robot feedback topics. At the prompts, press
+Enter to begin, choose x/y/z, and enter "o" to validate each movement. Choose q
+to leave the translation menu; the script then asks before opening the hand.
+"""
 
 import argparse
 import os
@@ -97,6 +120,8 @@ class SumanEndoscopeHold(Node):
         self._latest_velocities: Optional[Dict[str, float]] = None
         self._latest_arm_pose: Optional[List[float]] = None
         self._latest_arm_pose_received_at = 0.0
+        self._seen_arm_tf_frames: List[Tuple[str, str]] = []
+        self.arm_tf_topic = arm_tf_topic
         self._last_feedback_warning = 0.0
         self._hand_close_initial_error: Optional[float] = None
         self._hand_close_stall_since: Optional[float] = None
@@ -197,9 +222,18 @@ class SumanEndoscopeHold(Node):
 
     def _arm_tf_callback(self, msg: TFMessage) -> None:
         for transform in msg.transforms:
+            frame_pair = (
+                transform.header.frame_id.strip("/"),
+                transform.child_frame_id.strip("/"),
+            )
             if (
-                transform.header.frame_id == RIGHT_ARM_TF_PARENT
-                and transform.child_frame_id == RIGHT_ARM_TF_CHILD
+                frame_pair not in self._seen_arm_tf_frames
+                and len(self._seen_arm_tf_frames) < 10
+            ):
+                self._seen_arm_tf_frames.append(frame_pair)
+            if (
+                frame_pair[0] == RIGHT_ARM_TF_PARENT
+                and frame_pair[1] == RIGHT_ARM_TF_CHILD
             ):
                 translation = transform.transform.translation
                 rotation = transform.transform.rotation
@@ -414,17 +448,17 @@ def _confirm_translation(prompt: str) -> bool:
 def _wait_for_arm_pose(
     node: SumanEndoscopeHold,
     executor: MultiThreadedExecutor,
-    received_after: float,
 ) -> Optional[List[float]]:
     deadline = time.monotonic() + TF_WAIT_TIMEOUT_SECONDS
+    refresh_until = min(deadline, time.monotonic() + 0.25)
     while rclpy.ok() and time.monotonic() < deadline:
         if (
             node._latest_arm_pose is not None
-            and node._latest_arm_pose_received_at > received_after
+            and time.monotonic() >= refresh_until
         ):
             return list(node._latest_arm_pose)
         executor.spin_once(timeout_sec=0.1)
-    return None
+    return list(node._latest_arm_pose) if node._latest_arm_pose is not None else None
 
 
 def _wait_for_cartesian_target(
@@ -491,9 +525,28 @@ def _run_translation_menu(
             print("Deplacement annule.")
             continue
 
-        start = _wait_for_arm_pose(node, executor, time.monotonic())
+        start = _wait_for_arm_pose(node, executor)
         if start is None:
-            print("Pose TF recente indisponible ; aucun mouvement envoye.")
+            if node.count_publishers(node.arm_tf_topic) == 0:
+                print(
+                    f"Aucun publisher sur {node.arm_tf_topic} ; "
+                    "aucun mouvement envoye."
+                )
+            elif node._seen_arm_tf_frames:
+                frames = ", ".join(
+                    f"{parent}->{child}"
+                    for parent, child in node._seen_arm_tf_frames
+                )
+                print(
+                    "Des TF sont recus, mais la paire attendue "
+                    f"{RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD} est absente. "
+                    f"Paires observees : {frames}. Aucun mouvement envoye."
+                )
+            else:
+                print(
+                    f"Aucune pose TF recue sur {node.arm_tf_topic} ; "
+                    "aucun mouvement envoye."
+                )
             return False
 
         target = list(start)
@@ -551,6 +604,11 @@ def main(args=None) -> None:
         help="JointState feedback topic; overrides --robot-id.",
     )
     parser.add_argument(
+        "--arm-tf-topic",
+        default="",
+        help="Arm TF feedback topic; overrides the topic derived from --robot-id.",
+    )
+    parser.add_argument(
         "--main-frame",
         default="main",
         help="Parent TF frame for the endoscope frame (default: main).",
@@ -575,9 +633,14 @@ def main(args=None) -> None:
         parsed_args.joint_state_topic.strip()
         or f"/{parsed_args.robot_id}/mc/pr10_joint_states_topic"
     )
-    arm_tf_topic = f"/{parsed_args.robot_id}/mc/pr10_arm_tf_topic"
+    arm_tf_topic = (
+        parsed_args.arm_tf_topic.strip()
+        or f"/{parsed_args.robot_id}/mc/pr10_arm_tf_topic"
+    )
     if not joint_state_topic.startswith("/"):
         joint_state_topic = "/" + joint_state_topic
+    if not arm_tf_topic.startswith("/"):
+        arm_tf_topic = "/" + arm_tf_topic
 
     rclpy.init(args=args)
     node = SumanEndoscopeHold(
