@@ -66,9 +66,11 @@ CARTESIAN_POSITION_TOLERANCE = 0.01
 CARTESIAN_SETTLE_SECONDS = 0.5
 CARTESIAN_TIMEOUT_SECONDS = 60.0
 TF_WAIT_TIMEOUT_SECONDS = 5.0
+TF_DIAGNOSTIC_INTERVAL_SECONDS = 2.0
 RIGHT_ARM_TF_PARENT = "waist_link_4"
 RIGHT_ARM_TF_CHILD = "right_arm_link_6"
 TRANSLATION_AXES = {"x": 0, "y": 1, "z": 2}
+ONLINE_MOTION_TOPIC = "/external/online_motion_command"
 
 ENDOSCOPE_STEPS: List[Tuple[str, List[float]]] = [
     (
@@ -107,7 +109,7 @@ class SumanEndoscopeHold(Node):
         super().__init__("suman_hold_endoscope")
         self.publisher = self.create_publisher(
             OnlineMotionCommand,
-            "/external/online_motion_command",
+            ONLINE_MOTION_TOPIC,
             10,
         )
         self.steps = ENDOSCOPE_STEPS
@@ -120,7 +122,12 @@ class SumanEndoscopeHold(Node):
         self._latest_velocities: Optional[Dict[str, float]] = None
         self._latest_arm_pose: Optional[List[float]] = None
         self._latest_arm_pose_received_at = 0.0
+        self._latest_arm_tf_stamp: Optional[Tuple[int, int]] = None
         self._seen_arm_tf_frames: List[Tuple[str, str]] = []
+        self._arm_tf_message_count = 0
+        self._arm_tf_transform_count = 0
+        self._matching_arm_tf_count = 0
+        self._last_tf_diagnostic_at = 0.0
         self.arm_tf_topic = arm_tf_topic
         self._last_feedback_warning = 0.0
         self._hand_close_initial_error: Optional[float] = None
@@ -145,7 +152,8 @@ class SumanEndoscopeHold(Node):
         self.timer = self.create_timer(0.1, self._advance)
         self.get_logger().info(
             f"Joint-state feedback: {joint_state_topic}; "
-            f"arm TF feedback: {arm_tf_topic}; selected instrument: endoscope."
+            f"arm TF feedback: {arm_tf_topic}; selected instrument: endoscope. "
+            f"Expected arm TF: {RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD}."
         )
 
     def _publish_tool_frame(self, main_frame: str, tool_frame: str) -> None:
@@ -221,6 +229,14 @@ class SumanEndoscopeHold(Node):
         }
 
     def _arm_tf_callback(self, msg: TFMessage) -> None:
+        self._arm_tf_message_count += 1
+        self._arm_tf_transform_count += len(msg.transforms)
+        if self._arm_tf_message_count == 1:
+            self.get_logger().info(
+                f"First TFMessage received on {self.arm_tf_topic}: "
+                f"{len(msg.transforms)} transform(s)."
+            )
+
         for transform in msg.transforms:
             frame_pair = (
                 transform.header.frame_id.strip("/"),
@@ -231,10 +247,14 @@ class SumanEndoscopeHold(Node):
                 and len(self._seen_arm_tf_frames) < 10
             ):
                 self._seen_arm_tf_frames.append(frame_pair)
+                self.get_logger().info(
+                    f"TF frame observed: {frame_pair[0]}->{frame_pair[1]}."
+                )
             if (
                 frame_pair[0] == RIGHT_ARM_TF_PARENT
                 and frame_pair[1] == RIGHT_ARM_TF_CHILD
             ):
+                self._matching_arm_tf_count += 1
                 translation = transform.transform.translation
                 rotation = transform.transform.rotation
                 self._latest_arm_pose = [
@@ -247,6 +267,27 @@ class SumanEndoscopeHold(Node):
                     float(rotation.z),
                 ]
                 self._latest_arm_pose_received_at = time.monotonic()
+                self._latest_arm_tf_stamp = (
+                    int(transform.header.stamp.sec),
+                    int(transform.header.stamp.nanosec),
+                )
+                now = self._latest_arm_pose_received_at
+                if (
+                    self._matching_arm_tf_count == 1
+                    or now - self._last_tf_diagnostic_at
+                    >= TF_DIAGNOSTIC_INTERVAL_SECONDS
+                ):
+                    self.get_logger().info(
+                        f"Matching arm TF #{self._matching_arm_tf_count}: "
+                        f"{RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD}, "
+                        f"position=({translation.x:.4f}, {translation.y:.4f}, "
+                        f"{translation.z:.4f}), "
+                        f"quaternion=({rotation.x:.4f}, {rotation.y:.4f}, "
+                        f"{rotation.z:.4f}, {rotation.w:.4f}), "
+                        f"header_stamp={self._latest_arm_tf_stamp[0]}."
+                        f"{self._latest_arm_tf_stamp[1]:09d}."
+                    )
+                    self._last_tf_diagnostic_at = now
 
     def _warn_feedback(self, message: str) -> None:
         now = time.monotonic()
@@ -391,7 +432,9 @@ class SumanEndoscopeHold(Node):
         msg.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(msg)
         self.get_logger().info(
-            f"Published command {self.cmd_id} for the right hand."
+            f"Published command {self.cmd_id} for the right hand on "
+            f"{ONLINE_MOTION_TOPIC}; subscribers currently detected="
+            f"{self.count_subscribers(ONLINE_MOTION_TOPIC)}."
         )
 
     def _publish_cartesian_target(self, target: List[float]) -> None:
@@ -419,7 +462,11 @@ class SumanEndoscopeHold(Node):
         msg.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(msg)
         self.get_logger().info(
-            f"Published Cartesian command {self.cmd_id} for the right arm."
+            f"Published Cartesian command {self.cmd_id} for the right arm: "
+            f"reference_frame={msg.reference_frame}, target={target[:3]} m, "
+            f"orientation(wxyz)={target[3:]}, topic={ONLINE_MOTION_TOPIC}, "
+            f"subscribers currently detected="
+            f"{self.count_subscribers(ONLINE_MOTION_TOPIC)}."
         )
 
 
@@ -449,16 +496,75 @@ def _wait_for_arm_pose(
     node: SumanEndoscopeHold,
     executor: MultiThreadedExecutor,
 ) -> Optional[List[float]]:
-    deadline = time.monotonic() + TF_WAIT_TIMEOUT_SECONDS
-    refresh_until = min(deadline, time.monotonic() + 0.25)
+    print(
+        f"[TF] Recherche de {RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD} sur "
+        f"{node.arm_tf_topic} (timeout={TF_WAIT_TIMEOUT_SECONDS:.1f}s, "
+        f"publishers actuellement detectes="
+        f"{node.count_publishers(node.arm_tf_topic)}).",
+        flush=True,
+    )
+    if node._latest_arm_pose is not None:
+        age = time.monotonic() - node._latest_arm_pose_received_at
+        print(
+            f"[TF] Pose deja en cache; age a la reception={age:.3f}s, "
+            f"pose xyz=({node._latest_arm_pose[0]:.4f}, "
+            f"{node._latest_arm_pose[1]:.4f}, "
+            f"{node._latest_arm_pose[2]:.4f}) m; "
+            f"header_stamp={node._latest_arm_tf_stamp}; "
+            f"TF correspondantes recues={node._matching_arm_tf_count}.",
+            flush=True,
+        )
+        return list(node._latest_arm_pose)
+
+    started_at = time.monotonic()
+    deadline = started_at + TF_WAIT_TIMEOUT_SECONDS
+    last_report_at = started_at
     while rclpy.ok() and time.monotonic() < deadline:
-        if (
-            node._latest_arm_pose is not None
-            and time.monotonic() >= refresh_until
-        ):
-            return list(node._latest_arm_pose)
         executor.spin_once(timeout_sec=0.1)
-    return list(node._latest_arm_pose) if node._latest_arm_pose is not None else None
+        if node._latest_arm_pose is not None:
+            elapsed = time.monotonic() - started_at
+            print(
+                f"[TF] Pose attendue recue apres {elapsed:.2f}s: "
+                f"xyz=({node._latest_arm_pose[0]:.4f}, "
+                f"{node._latest_arm_pose[1]:.4f}, "
+                f"{node._latest_arm_pose[2]:.4f}) m; "
+                f"header_stamp={node._latest_arm_tf_stamp}; "
+                f"{node._arm_tf_message_count} message(s), "
+                f"{node._arm_tf_transform_count} transform(s), "
+                f"{node._matching_arm_tf_count} correspondance(s).",
+                flush=True,
+            )
+            return list(node._latest_arm_pose)
+
+        now = time.monotonic()
+        if now - last_report_at >= TF_DIAGNOSTIC_INTERVAL_SECONDS:
+            seen = ", ".join(
+                f"{parent}->{child}"
+                for parent, child in node._seen_arm_tf_frames
+            ) or "(aucune)"
+            print(
+                f"[TF] Toujours en attente ({now - started_at:.1f}s): "
+                f"{node._arm_tf_message_count} message(s), "
+                f"{node._arm_tf_transform_count} transform(s), "
+                f"publishers={node.count_publishers(node.arm_tf_topic)}, "
+                f"frames observees={seen}.",
+                flush=True,
+            )
+            last_report_at = now
+
+    seen = ", ".join(
+        f"{parent}->{child}" for parent, child in node._seen_arm_tf_frames
+    ) or "(aucune)"
+    print(
+        f"[TF][ECHEC] Pose {RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD} "
+        f"non recue en {TF_WAIT_TIMEOUT_SECONDS:.1f}s. "
+        f"publishers={node.count_publishers(node.arm_tf_topic)}, "
+        f"messages={node._arm_tf_message_count}, "
+        f"transforms={node._arm_tf_transform_count}, "
+        f"frames observees={seen}.",
+        flush=True,
+    )
+    return None
 
 
 def _wait_for_cartesian_target(
@@ -466,30 +572,109 @@ def _wait_for_cartesian_target(
     executor: MultiThreadedExecutor,
     target: List[float],
 ) -> bool:
-    deadline = time.monotonic() + CARTESIAN_TIMEOUT_SECONDS
+    started_at = time.monotonic()
+    deadline = started_at + CARTESIAN_TIMEOUT_SECONDS
     settled_since: Optional[float] = None
     last_pose_received_at = node._latest_arm_pose_received_at
+    last_report_at = started_at
+    received_new_tf = False
+    last_position_error: Optional[float] = None
+    print(
+        f"[TF] Suivi de la cible xyz=({target[0]:.4f}, {target[1]:.4f}, "
+        f"{target[2]:.4f}) m; tolerance={CARTESIAN_POSITION_TOLERANCE:.3f}m, "
+        f"stabilisation={CARTESIAN_SETTLE_SECONDS:.1f}s, "
+        f"timeout={CARTESIAN_TIMEOUT_SECONDS:.1f}s. "
+        "Attente d'au moins une nouvelle TF apres l'envoi.",
+        flush=True,
+    )
 
     while rclpy.ok() and time.monotonic() < deadline:
         executor.spin_once(timeout_sec=0.1)
         pose = node._latest_arm_pose
         pose_received_at = node._latest_arm_pose_received_at
-        if pose is None or pose_received_at == last_pose_received_at:
+        now = time.monotonic()
+        if pose is not None and pose_received_at > last_pose_received_at:
+            received_new_tf = True
+        else:
+            pose = None
+
+        if pose is None:
+            if now - last_report_at >= TF_DIAGNOSTIC_INTERVAL_SECONDS:
+                latest_pose = node._latest_arm_pose
+                pose_description = (
+                    "aucune pose"
+                    if latest_pose is None
+                    else (
+                        f"derniere pose=({latest_pose[0]:.4f}, "
+                        f"{latest_pose[1]:.4f}, {latest_pose[2]:.4f}) m, "
+                        f"age={now - node._latest_arm_pose_received_at:.2f}s, "
+                        f"header_stamp={node._latest_arm_tf_stamp}"
+                    )
+                )
+                print(
+                    f"[TF] Suivi en cours depuis {now - started_at:.1f}s; "
+                    f"aucune nouvelle TF depuis l'envoi; "
+                    f"{pose_description}; "
+                    f"TF correspondantes total={node._matching_arm_tf_count}.",
+                    flush=True,
+                )
+                last_report_at = now
             continue
+
         last_pose_received_at = pose_received_at
 
         position_error = max(
             abs(pose[index] - target[index]) for index in range(3)
         )
-        now = time.monotonic()
+        last_position_error = position_error
         if position_error <= CARTESIAN_POSITION_TOLERANCE:
             if settled_since is None:
                 settled_since = now
             elif now - settled_since >= CARTESIAN_SETTLE_SECONDS:
+                print(
+                    f"[TF] Cible confirmee apres {now - started_at:.2f}s: "
+                    f"erreur max={position_error:.4f}m, "
+                    f"pose=({pose[0]:.4f}, {pose[1]:.4f}, "
+                    f"{pose[2]:.4f}) m.",
+                    flush=True,
+                )
                 return True
         else:
             settled_since = None
 
+        if now - last_report_at >= TF_DIAGNOSTIC_INTERVAL_SECONDS:
+            print(
+                f"[TF] Suivi depuis {now - started_at:.1f}s: "
+                f"pose=({pose[0]:.4f}, {pose[1]:.4f}, {pose[2]:.4f}) m, "
+                f"erreur max={position_error:.4f}m, "
+                f"nouvelle TF recue={'oui' if received_new_tf else 'non'}, "
+                f"header_stamp={node._latest_arm_tf_stamp}, "
+                f"TF correspondantes total={node._matching_arm_tf_count}.",
+                flush=True,
+            )
+            last_report_at = now
+
+    latest_pose = node._latest_arm_pose
+    latest_description = (
+        "aucune pose disponible"
+        if latest_pose is None
+        else (
+            f"derniere pose=({latest_pose[0]:.4f}, "
+            f"{latest_pose[1]:.4f}, {latest_pose[2]:.4f}) m, "
+            f"age={time.monotonic() - node._latest_arm_pose_received_at:.2f}s, "
+            f"header_stamp={node._latest_arm_tf_stamp}"
+        )
+    )
+    print(
+        f"[TF][ECHEC] Cible non confirmee en "
+        f"{CARTESIAN_TIMEOUT_SECONDS:.1f}s; nouvelle TF recue="
+        f"{'oui' if received_new_tf else 'non'}, "
+        f"derniere erreur max="
+        f"{'inconnue' if last_position_error is None else f'{last_position_error:.4f}m'}, "
+        f"{latest_description}, "
+        f"TF correspondantes total={node._matching_arm_tf_count}.",
+        flush=True,
+    )
     return False
 
 
@@ -552,6 +737,9 @@ def _run_translation_menu(
         target = list(start)
         target[axis_index] += CARTESIAN_TRANSLATION_METERS
         print(
+            f"Pose initiale xyz=({start[0]:.4f}, {start[1]:.4f}, "
+            f"{start[2]:.4f}) m, quaternion(wxyz)=({start[3]:.4f}, "
+            f"{start[4]:.4f}, {start[5]:.4f}, {start[6]:.4f}).\n"
             f"Deplacement vers {axis.upper()}+10 cm "
             f"(pose cible: {target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f} m)."
         )
