@@ -1,29 +1,12 @@
 
 #!/usr/bin/env python3
 
-"""Interactive ROS 2 demo to grasp and move an endoscope with the right arm.
-
-The script closes the right hand around the endoscope, publishes its tool frame,
-then lets the operator select a +10 cm translation on X, Y, or Z. Each outward
-move and each return to the captured starting pose requires a separate
-confirmation. The script uses JointState and arm-TF feedback to monitor motion.
-
-Run on the robot computer from a Bash shell with ROS 2 Humble and the Paxini
-message workspace installed. Ensure the robot is in a state that accepts motion
-commands, the ROS domain matches the robot, and the work area is clear.
-
-Example (run from the repository root; adjust the message-workspace path and
-robot ID to match your installation):
-
-    source /opt/ros/humble/setup.bash
-    source ~/px_robot_code/paxini_ros2_msgs-1.0.1-99ad226/install/setup.bash
-    export ROBOT_ID=ROBOT_10
-    python3 Mathilda_tests/endoscope_manipulation.py
-
-ROBOT_ID defaults to ROBOT_10. Use --robot-id, --joint-state-topic, or
---arm-tf-topic to select different robot feedback topics. At the prompts, press
-Enter to begin, choose x/y/z, and enter "o" to validate each movement. Choose q
-to leave the translation menu; the script then asks before opening the hand.
+"""
+Robot grasp endoscope sequence.
+Human puts endoscope in robot hand.
+Possible movements: 
+- translation back and forth 10cm (x,y,z)
+! In the hand referential!
 """
 
 import argparse
