@@ -1,6 +1,9 @@
 
 #!/usr/bin/env python3
 
+"""En cours de redaction
+pas fonctionnel pour le moment"""
+
 import argparse
 import math
 import os
