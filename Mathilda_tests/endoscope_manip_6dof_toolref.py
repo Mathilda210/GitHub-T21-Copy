@@ -1,15 +1,6 @@
 
 #!/usr/bin/env python3
 
-"""
-Robot grasp endoscope sequence.
-Human puts endoscope in robot hand.
-Possible movements: 
-- translation back and forth 10cm (x,y,z)
-- rotation around x,y,z axes 5 degrees
-! In the object referential, offset 20 cm above the hand along local Z!
-"""
-
 import argparse
 import math
 import os
@@ -45,7 +36,7 @@ HAND_CLOSE_MIN_PROGRESS = 0.05
 HAND_CLOSE_STALL_SECONDS = 1.5
 VELOCITY_TOLERANCE = 0.01
 COMPARISON_EPSILON = 1e-9
-OBJECT_FRAME_OFFSET = (0.0, 0.0, 0.20)
+TOOL_FRAME_TRANSLATION = (0.0, 0.0, 0.22)
 CARTESIAN_TRANSLATION_METERS = 0.10
 CARTESIAN_ROTATION_DEGREES = 5.0
 CARTESIAN_POSITION_TOLERANCE = 0.01
@@ -153,23 +144,23 @@ class SumanEndoscopeHold(Node):
             transform.transform.translation.x,
             transform.transform.translation.y,
             transform.transform.translation.z,
-        ) = OBJECT_FRAME_OFFSET
+        ) = TOOL_FRAME_TRANSLATION
         transform.transform.rotation.w = 1.0
         self._static_transform_broadcaster = StaticTransformBroadcaster(self)
         self._static_transform_broadcaster.sendTransform(transform)
         self.get_logger().info(
             f"Published TF {main_frame} -> {tool_frame}: "
-            f"x={OBJECT_FRAME_OFFSET[0]:.2f} m, "
-            f"y={OBJECT_FRAME_OFFSET[1]:.2f} m, "
-            f"z={OBJECT_FRAME_OFFSET[2]:.2f} m; "
+            f"x={TOOL_FRAME_TRANSLATION[0]:.2f} m, "
+            f"y={TOOL_FRAME_TRANSLATION[1]:.2f} m, "
+            f"z={TOOL_FRAME_TRANSLATION[2]:.2f} m; "
             "orientation unchanged."
         )
         print(
             "\nRepere main : origine (0, 0, 0)\n"
             f"Repere outil ({tool_frame}) : "
-            f"x={OBJECT_FRAME_OFFSET[0]:+.2f} m, "
-            f"y={OBJECT_FRAME_OFFSET[1]:+.2f} m, "
-            f"z={OBJECT_FRAME_OFFSET[2]:+.2f} m\n"
+            f"x={TOOL_FRAME_TRANSLATION[0]:+.2f} m, "
+            f"y={TOOL_FRAME_TRANSLATION[1]:+.2f} m, "
+            f"z={TOOL_FRAME_TRANSLATION[2]:+.2f} m\n"
             "Orientation : identique au repere main.\n"
             "Pour voir les axes dans RViz, ajoutez l'affichage TF."
         )
@@ -501,42 +492,7 @@ def _quaternion_multiply(
     ]
 
 
-def _rotate_vector_by_quaternion(
-    quaternion: List[float],
-    vector: Tuple[float, float, float],
-) -> List[float]:
-    rotation = _normalize_quaternion(quaternion)
-    conjugate = [rotation[0], -rotation[1], -rotation[2], -rotation[3]]
-    rotated = _quaternion_multiply(
-        _quaternion_multiply(rotation, [0.0, *vector]),
-        conjugate,
-    )
-    return rotated[1:]
-
-
-def _hand_to_object_pose(hand_pose: List[float]) -> List[float]:
-    object_pose = list(hand_pose)
-    offset = _rotate_vector_by_quaternion(
-        hand_pose[3:],
-        OBJECT_FRAME_OFFSET,
-    )
-    for axis in range(3):
-        object_pose[axis] += offset[axis]
-    return object_pose
-
-
-def _object_to_hand_pose(object_pose: List[float]) -> List[float]:
-    hand_pose = list(object_pose)
-    offset = _rotate_vector_by_quaternion(
-        object_pose[3:],
-        OBJECT_FRAME_OFFSET,
-    )
-    for axis in range(3):
-        hand_pose[axis] -= offset[axis]
-    return hand_pose
-
-
-def _rotate_quaternion_in_local_frame(
+def _rotate_quaternion(
     quaternion: List[float],
     axis_index: int,
     angle_radians: float,
@@ -545,8 +501,21 @@ def _rotate_quaternion_in_local_frame(
     delta = [math.cos(half_angle), 0.0, 0.0, 0.0]
     delta[axis_index + 1] = math.sin(half_angle)
     return _normalize_quaternion(
-        _quaternion_multiply(_normalize_quaternion(quaternion), delta)
+        _quaternion_multiply(delta, _normalize_quaternion(quaternion))
     )
+
+
+def _rotate_vector(
+    quaternion: List[float],
+    vector: List[float],
+) -> List[float]:
+    normalized = _normalize_quaternion(quaternion)
+    conjugate = [normalized[0], -normalized[1], -normalized[2], -normalized[3]]
+    rotated = _quaternion_multiply(
+        _quaternion_multiply(normalized, [0.0] + vector),
+        conjugate,
+    )
+    return rotated[1:]
 
 
 def _quaternion_angular_error(
@@ -766,8 +735,7 @@ def _run_motion_menu(
     print(
         "\nMouvements de l'endoscope : translations de +10 cm ou rotations de "
         f"+/-{CARTESIAN_ROTATION_DEGREES:g} degres, puis retour a la pose de depart.\n"
-        "Axes exprimes dans le repere objet, decale de +20 cm sur Z local "
-        "par rapport a la main."
+        "Axes exprimes dans le repere waist_link_4 (pose TF de l'avant-bras droit)."
     )
     while rclpy.ok():
         try:
@@ -842,35 +810,54 @@ def _run_motion_menu(
                 )
             return False
 
-        object_start = _hand_to_object_pose(start)
-        object_target = list(object_start)
+        target = list(start)
+        start_tip_offset = _rotate_vector(
+            start[3:],
+            list(TOOL_FRAME_TRANSLATION),
+        )
+        start_tip_position = [
+            start[index] + start_tip_offset[index]
+            for index in range(3)
+        ]
+        desired_tip_position = list(start_tip_position)
         if is_rotation:
-            object_target[3:] = _rotate_quaternion_in_local_frame(
-                object_start[3:],
+            target[3:] = _rotate_quaternion(
+                start[3:],
                 ROTATION_AXES[axis],
                 math.radians(rotation_degrees),
             )
+            rotated_tip_offset = _rotate_vector(
+                target[3:],
+                list(TOOL_FRAME_TRANSLATION),
+            )
+            target[:3] = [
+                desired_tip_position[index] - rotated_tip_offset[index]
+                for index in range(3)
+            ]
         else:
-            local_translation = [0.0, 0.0, 0.0]
-            local_translation[TRANSLATION_AXES[axis]] = (
+            desired_tip_position[TRANSLATION_AXES[axis]] += (
                 CARTESIAN_TRANSLATION_METERS
             )
-            parent_translation = _rotate_vector_by_quaternion(
-                object_start[3:],
-                tuple(local_translation),
+            rotated_tip_offset = _rotate_vector(
+                target[3:],
+                list(TOOL_FRAME_TRANSLATION),
             )
-            for index in range(3):
-                object_target[index] += parent_translation[index]
-        target = _object_to_hand_pose(object_target)
+            target[:3] = [
+                desired_tip_position[index] - rotated_tip_offset[index]
+                for index in range(3)
+            ]
         print(
-            f"Pose objet initiale xyz=({object_start[0]:.4f}, "
-            f"{object_start[1]:.4f}, {object_start[2]:.4f}) m.\n"
-            f"Mouvement : {operation_label}; pose objet cible xyz="
-            f"({object_target[0]:.3f}, {object_target[1]:.3f}, "
-            f"{object_target[2]:.3f}) m, "
-            f"quaternion(wxyz)=({object_target[3]:.4f}, "
-            f"{object_target[4]:.4f}, {object_target[5]:.4f}, "
-            f"{object_target[6]:.4f})."
+            f"Pose initiale xyz=({start[0]:.4f}, {start[1]:.4f}, "
+            f"{start[2]:.4f}) m, quaternion(wxyz)=({start[3]:.4f}, "
+            f"{start[4]:.4f}, {start[5]:.4f}, {start[6]:.4f}).\n"
+            f"Pointe initiale xyz=({start_tip_position[0]:.3f}, "
+            f"{start_tip_position[1]:.3f}, {start_tip_position[2]:.3f}) m.\n"
+            f"Mouvement : {operation_label}; pose cible du bras xyz="
+            f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f}) m, "
+            f"pointe cible xyz=({desired_tip_position[0]:.3f}, "
+            f"{desired_tip_position[1]:.3f}, {desired_tip_position[2]:.3f}) m, "
+            f"quaternion(wxyz)=({target[3]:.4f}, {target[4]:.4f}, "
+            f"{target[5]:.4f}, {target[6]:.4f})."
         )
         node._publish_cartesian_target(target)
         if not _wait_for_cartesian_target(node, executor, target):
