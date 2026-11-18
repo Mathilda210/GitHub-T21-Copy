@@ -1,11 +1,7 @@
 
 #!/usr/bin/env python3
 
-"""Saisie de l'endoscope avec la main droite.
-L'endoscope est mis dans la main du robot par l'utilisateur.
-Une fois l'endoscope en main l'utilisatuer peut envoyé des commandes de mouvement cartésien pour le bras droit.
-translation 10cm et rotation 12° toujours en aller puis retour à la position initiale.
-Script non testé."""
+"""Manoeuvre de maintien d'un endoscope avec une main droite et son bras."""
 
 import argparse
 import math
@@ -56,7 +52,7 @@ CARTESIAN_SETTLE_SECONDS = 0.5
 CARTESIAN_TIMEOUT_SECONDS = 60.0
 TF_WAIT_TIMEOUT_SECONDS = 5.0
 TF_DIAGNOSTIC_INTERVAL_SECONDS = 2.0
-RIGHT_ARM_TF_PARENT = "waist_link_4"
+RIGHT_ARM_TF_PARENT = "waist_link_0"
 RIGHT_ARM_TF_CHILD = "right_arm_link_6"
 TRANSLATION_AXES = {"x": 0, "y": 1, "z": 2}
 ROTATION_AXES = {"x": 0, "y": 1, "z": 2}
@@ -586,28 +582,16 @@ def _tool_tip_pose_from_arm_pose(arm_pose: List[float]) -> List[float]:
     return _compose_pose(arm_pose, arm_to_tool_tip)
 
 
-def _arm_pose_from_tool_tip_pose(
-    tool_tip_pose: List[float]
-) -> List[float]:
-
-    orientation = _normalize_quaternion(
-        tool_tip_pose[3:]
-    )
-
-    offset = list(TOOL_FRAME_TRANSLATION)
-
-    arm_position_offset = _rotate_vector(
-        orientation,
-        [-offset[0], -offset[1], -offset[2]]
-    )
-
-    arm_position = [
-        tool_tip_pose[0] + arm_position_offset[0],
-        tool_tip_pose[1] + arm_position_offset[1],
-        tool_tip_pose[2] + arm_position_offset[2],
+def _arm_pose_from_tool_tip_pose(tool_tip_pose: List[float]) -> List[float]:
+    # Convertit une pose cible de l'outil en pose cible du bras.
+    arm_to_tool_tip = [
+        *TOOL_FRAME_TRANSLATION,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
     ]
-
-    return arm_position + orientation
+    return _compose_pose(tool_tip_pose, _inverse_pose(arm_to_tool_tip))
 
 
 def _quaternion_angular_error(
@@ -910,30 +894,11 @@ def _run_motion_menu(
         start_tool_tip_pose = _tool_tip_pose_from_arm_pose(start_arm_pose)
         target_tool_tip_pose = list(start_tool_tip_pose)
         if is_rotation:
-            angle = math.radians(rotation_degrees)
-
-            # nouvelle orientation du tool tip
-            new_orientation = _rotate_quaternion(
+            target_tool_tip_pose[3:] = _rotate_quaternion(
                 start_tool_tip_pose[3:],
                 ROTATION_AXES[axis],
-                angle,
+                math.radians(rotation_degrees),
             )
-
-            target_tool_tip_pose[3:] = new_orientation
-
-            # vecteur entre la pointe et le poignet
-            offset = list(TOOL_FRAME_TRANSLATION)
-
-            # position actuelle du tool tip
-            tool_tip_position = start_tool_tip_pose[:3]
-
-            # où se trouverait le poignet après rotation
-            rotated_offset = _rotate_vector(
-                new_orientation,
-                [-offset[0], -offset[1], -offset[2]]
-            )
-
-            target_tool_tip_pose[:3] = tool_tip_position
         else:
             local_translation = [0.0, 0.0, 0.0]
             local_translation[TRANSLATION_AXES[axis]] = (
@@ -964,6 +929,8 @@ def _run_motion_menu(
             f"({target_arm_pose[3]:.4f}, {target_arm_pose[4]:.4f}, "
             f"{target_arm_pose[5]:.4f}, {target_arm_pose[6]:.4f})."
         )
+        print("start arm :", start_arm_pose[:3])
+        print("target arm:", target_arm_pose[:3])
         node._publish_cartesian_target(target_arm_pose)
         if not _wait_for_cartesian_target(node, executor, target_arm_pose):
             print(
