@@ -1,7 +1,11 @@
 
 #!/usr/bin/env python3
 
-"""Manoeuvre de maintien d'un endoscope avec une main droite et son bras."""
+"""Saisie de l'endoscope avec la main droite.
+L'endoscope est mis dans la main du robot par l'utilisateur.
+Une fois l'endoscope en main l'utilisatuer peut envoyé des commandes de mouvement cartésien pour le bras droit.
+translation 10cm et rotation 12° toujours en aller puis retour à la position initiale.
+Script non testé."""
 
 import argparse
 import math
