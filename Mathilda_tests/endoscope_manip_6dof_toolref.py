@@ -1,8 +1,7 @@
 
 #!/usr/bin/env python3
 
-"""En cours de redaction
-pas fonctionnel pour le moment"""
+"""Manoeuvre de maintien d'un endoscope avec une main droite et son bras."""
 
 import argparse
 import math
@@ -24,15 +23,19 @@ from tf2_msgs.msg import TFMessage
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
+# Identifiants des groupes utilises par le systeme de mouvement.
 RIGHT_HAND_GROUP = 5
 RIGHT_ARM_GROUP = 1
+# Liste ordonnee des 15 articulations de la main droite.
 RIGHT_HAND_JOINTS = [
     f"right_{finger}_joint_{index}"
     for finger in ("index", "middle", "ring", "pinky", "thumb")
     for index in range(3)
 ]
+# Position ouverte utilisee lors du retour a la position initiale.
 HOME_HAND_POSE = [0.0] * len(RIGHT_HAND_JOINTS)
 
+# Constantes pour le suivi, les tolerances et les mouvements cartesien.
 POSE_PAUSE_SECONDS = 2.0
 POSITION_TOLERANCE = 0.1
 HAND_CLOSE_MIN_PROGRESS = 0.05
@@ -55,6 +58,7 @@ TRANSLATION_AXES = {"x": 0, "y": 1, "z": 2}
 ROTATION_AXES = {"x": 0, "y": 1, "z": 2}
 ONLINE_MOTION_TOPIC = "/external/online_motion_command"
 
+# Deux poses mesurees pour refermer progressivement la main sur l'endoscope.
 ENDOSCOPE_STEPS: List[Tuple[str, List[float]]] = [
     (
         "pouce referme",
@@ -80,7 +84,7 @@ ENDOSCOPE_STEPS: List[Tuple[str, List[float]]] = [
 
 
 class SumanEndoscopeHold(Node):
-    """Apply the measured endoscope grasp sequence and keep its final pose."""
+    """Applique la sequence mesuree et conserve la pose finale de l'endoscope."""
 
     def __init__(
         self,
@@ -88,6 +92,7 @@ class SumanEndoscopeHold(Node):
         arm_tf_topic: str,
     ) -> None:
         super().__init__("suman_hold_endoscope")
+        # Le nœud publie les commandes de mouvement sur ce topic.
         self.publisher = self.create_publisher(
             OnlineMotionCommand,
             ONLINE_MOTION_TOPIC,
@@ -118,6 +123,7 @@ class SumanEndoscopeHold(Node):
         self.cmd_id = 0
         self._publish_tool_frame()
 
+        # Receptions des positions articulaire et des transformations du bras.
         self.create_subscription(
             JointState,
             joint_state_topic,
@@ -138,6 +144,7 @@ class SumanEndoscopeHold(Node):
         )
 
     def _publish_tool_frame(self) -> None:
+        # Repere fixe place a 22 cm selon Z depuis le repere de la main.
         transform = TransformStamped()
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = RIGHT_ARM_TF_CHILD
@@ -168,6 +175,7 @@ class SumanEndoscopeHold(Node):
         )
 
     def start_endoscope(self) -> None:
+        # Relance la sequence de prise de l'endoscope.
         self.steps = ENDOSCOPE_STEPS
         self.home_reset = False
         self.step_index = 0
@@ -176,6 +184,7 @@ class SumanEndoscopeHold(Node):
         self.waiting_target = None
 
     def start_home_reset(self) -> None:
+        # Remplace la sequence par l'ouverture complete de la main.
         self.steps = [
             ("retour a la position initiale (doigts ouverts)", HOME_HAND_POSE)
         ]
@@ -187,6 +196,7 @@ class SumanEndoscopeHold(Node):
         self.get_logger().info("Returning the right hand to its open home position.")
 
     def _joint_state_callback(self, msg: JointState) -> None:
+        # Verifie les donnees JointState avant de les enregistrer.
         if len(msg.name) != len(msg.position) or len(msg.name) != len(msg.velocity):
             self._warn_feedback(
                 "Waiting for valid JointState position and velocity data."
@@ -210,6 +220,7 @@ class SumanEndoscopeHold(Node):
         }
 
     def _arm_tf_callback(self, msg: TFMessage) -> None:
+        # Cherche la transformation exacte reliant le bassin au dernier lien du bras.
         self._arm_tf_message_count += 1
         self._arm_tf_transform_count += len(msg.transforms)
         if self._arm_tf_message_count == 1:
@@ -277,6 +288,7 @@ class SumanEndoscopeHold(Node):
             self._last_feedback_warning = now
 
     def _target_reached(self) -> Tuple[bool, float, float]:
+        # Verifie la position, la vitesse et un eventuel contact de la main.
         if (
             self._latest_positions is None
             or self._latest_velocities is None
@@ -331,6 +343,7 @@ class SumanEndoscopeHold(Node):
         return reached, max_position_error, max_velocity
 
     def _advance(self) -> None:
+        # Machine a etats : envoi, attente de la cible, pause puis pose suivante.
         if self.phase == "done":
             return
 
@@ -392,6 +405,7 @@ class SumanEndoscopeHold(Node):
             self.phase = "await_target"
 
     def _publish_target(self, target: List[float]) -> None:
+        # Publie une cible articulaire pour la main droite.
         msg = OnlineMotionCommand()
         msg.type = OnlineMotionCommand.JOINT_TRAJECTORY
         msg.target_arm_indices = [RIGHT_HAND_GROUP]
@@ -419,6 +433,7 @@ class SumanEndoscopeHold(Node):
         )
 
     def _publish_cartesian_target(self, target: List[float]) -> None:
+        # Publie une cible cartesienne pour le bras droit.
         msg = OnlineMotionCommand()
         msg.type = OnlineMotionCommand.CARTESIAN_TRAJECTORY
         msg.target_arm_indices = [RIGHT_ARM_GROUP]
@@ -452,6 +467,7 @@ class SumanEndoscopeHold(Node):
 
 
 def _confirm_endoscope_ready() -> bool:
+    # Demande une confirmation humaine avant toute manipulation.
     print(
         "\nInstrument choisi : endoscope.\n"
         "Placez l'instrument dans la main droite et degagez la zone autour "
@@ -474,6 +490,7 @@ def _confirm_motion(prompt: str) -> bool:
 
 
 def _normalize_quaternion(quaternion: List[float]) -> List[float]:
+    # Rend le quaternion utilisable comme orientation en conservant sa direction.
     norm = math.hypot(*quaternion)
     if norm <= COMPARISON_EPSILON:
         raise ValueError("Cannot use a zero-length orientation quaternion.")
@@ -499,6 +516,7 @@ def _rotate_quaternion(
     axis_index: int,
     angle_radians: float,
 ) -> List[float]:
+    # Applique une petite rotation autour d'un axe X, Y ou Z.
     half_angle = angle_radians / 2.0
     delta = [math.cos(half_angle), 0.0, 0.0, 0.0]
     delta[axis_index + 1] = math.sin(half_angle)
@@ -521,6 +539,7 @@ def _rotate_vector(
 
 
 def _compose_pose(base_pose: List[float], relative_pose: List[float]) -> List[float]:
+    # Ajoute une translation locale a une pose de reference.
     base_orientation = _normalize_quaternion(base_pose[3:])
     translated_position = _rotate_vector(base_orientation, relative_pose[:3])
     orientation = _normalize_quaternion(
@@ -536,6 +555,7 @@ def _compose_pose(base_pose: List[float], relative_pose: List[float]) -> List[fl
 
 
 def _inverse_pose(pose: List[float]) -> List[float]:
+    # Calcule la pose inverse servant aux conversions de reperes.
     orientation = _normalize_quaternion(pose[3:])
     inverse_orientation = [
         orientation[0],
@@ -551,6 +571,7 @@ def _inverse_pose(pose: List[float]) -> List[float]:
 
 
 def _tool_tip_pose_from_arm_pose(arm_pose: List[float]) -> List[float]:
+    # Convertit la pose du bras en pose de l'embout de l'outil.
     arm_to_tool_tip = [
         *TOOL_FRAME_TRANSLATION,
         1.0,
@@ -562,6 +583,7 @@ def _tool_tip_pose_from_arm_pose(arm_pose: List[float]) -> List[float]:
 
 
 def _arm_pose_from_tool_tip_pose(tool_tip_pose: List[float]) -> List[float]:
+    # Convertit une pose cible de l'outil en pose cible du bras.
     arm_to_tool_tip = [
         *TOOL_FRAME_TRANSLATION,
         1.0,
@@ -586,6 +608,7 @@ def _wait_for_arm_pose(
     node: SumanEndoscopeHold,
     executor: MultiThreadedExecutor,
 ) -> Optional[List[float]]:
+    # Attend qu'une transformation valide du bras soit disponible.
     print(
         f"[TF] Recherche de {RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD} sur "
         f"{node.arm_tf_topic} (timeout={TF_WAIT_TIMEOUT_SECONDS:.1f}s, "
@@ -662,6 +685,7 @@ def _wait_for_cartesian_target(
     executor: MultiThreadedExecutor,
     target: List[float],
 ) -> bool:
+    # Attend que le bras atteigne la cible puis reste stable.
     started_at = time.monotonic()
     deadline = started_at + CARTESIAN_TIMEOUT_SECONDS
     settled_since: Optional[float] = None
@@ -786,6 +810,7 @@ def _run_motion_menu(
     node: SumanEndoscopeHold,
     executor: MultiThreadedExecutor,
 ) -> bool:
+    # Propose les translations et rotations cartesiennes une par une.
     print(
         "\nMouvements de l'endoscope : translations de +10 cm ou rotations de "
         f"+/-{CARTESIAN_ROTATION_DEGREES:g} degres, puis retour a la pose de depart.\n"
@@ -821,6 +846,7 @@ def _run_motion_menu(
             continue
 
         if is_rotation:
+            # Les rotations sont exprimees dans le repere de l'outil.
             axis = choice[1]
             direction = 1.0 if choice[2] == "+" else -1.0
             rotation_degrees = direction * CARTESIAN_ROTATION_DEGREES
@@ -828,6 +854,7 @@ def _run_motion_menu(
                 f"rotation de {rotation_degrees:+g} degres autour de {axis.upper()}"
             )
         else:
+            # Les translations sont appliquees selon l'orientation de l'outil.
             axis = choice
             operation_label = f"deplacement de +10 cm sur {axis.upper()}"
 
@@ -933,6 +960,7 @@ def _run_motion_menu(
 
 
 def main(args=None) -> None:
+    # Lit les options, initialise ROS 2 puis lance les tests interactifs.
     parser = argparse.ArgumentParser(
         description="Saisir l'endoscope et publier son repere outil."
     )
