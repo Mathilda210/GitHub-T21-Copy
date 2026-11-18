@@ -586,16 +586,28 @@ def _tool_tip_pose_from_arm_pose(arm_pose: List[float]) -> List[float]:
     return _compose_pose(arm_pose, arm_to_tool_tip)
 
 
-def _arm_pose_from_tool_tip_pose(tool_tip_pose: List[float]) -> List[float]:
-    # Convertit une pose cible de l'outil en pose cible du bras.
-    arm_to_tool_tip = [
-        *TOOL_FRAME_TRANSLATION,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
+def _arm_pose_from_tool_tip_pose(
+    tool_tip_pose: List[float]
+) -> List[float]:
+
+    orientation = _normalize_quaternion(
+        tool_tip_pose[3:]
+    )
+
+    offset = list(TOOL_FRAME_TRANSLATION)
+
+    arm_position_offset = _rotate_vector(
+        orientation,
+        [-offset[0], -offset[1], -offset[2]]
+    )
+
+    arm_position = [
+        tool_tip_pose[0] + arm_position_offset[0],
+        tool_tip_pose[1] + arm_position_offset[1],
+        tool_tip_pose[2] + arm_position_offset[2],
     ]
-    return _compose_pose(tool_tip_pose, _inverse_pose(arm_to_tool_tip))
+
+    return arm_position + orientation
 
 
 def _quaternion_angular_error(
@@ -898,11 +910,30 @@ def _run_motion_menu(
         start_tool_tip_pose = _tool_tip_pose_from_arm_pose(start_arm_pose)
         target_tool_tip_pose = list(start_tool_tip_pose)
         if is_rotation:
-            target_tool_tip_pose[3:] = _rotate_quaternion(
+            angle = math.radians(rotation_degrees)
+
+            # nouvelle orientation du tool tip
+            new_orientation = _rotate_quaternion(
                 start_tool_tip_pose[3:],
                 ROTATION_AXES[axis],
-                math.radians(rotation_degrees),
+                angle,
             )
+
+            target_tool_tip_pose[3:] = new_orientation
+
+            # vecteur entre la pointe et le poignet
+            offset = list(TOOL_FRAME_TRANSLATION)
+
+            # position actuelle du tool tip
+            tool_tip_position = start_tool_tip_pose[:3]
+
+            # où se trouverait le poignet après rotation
+            rotated_offset = _rotate_vector(
+                new_orientation,
+                [-offset[0], -offset[1], -offset[2]]
+            )
+
+            target_tool_tip_pose[:3] = tool_tip_position
         else:
             local_translation = [0.0, 0.0, 0.0]
             local_translation[TRANSLATION_AXES[axis]] = (
