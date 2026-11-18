@@ -40,6 +40,7 @@ HAND_CLOSE_STALL_SECONDS = 1.5
 VELOCITY_TOLERANCE = 0.01
 COMPARISON_EPSILON = 1e-9
 TOOL_FRAME_TRANSLATION = (0.0, 0.0, 0.22)
+TOOL_TIP_FRAME = "tool_tip"
 CARTESIAN_TRANSLATION_METERS = 0.10
 CARTESIAN_ROTATION_DEGREES = 12.0
 CARTESIAN_POSITION_TOLERANCE = 0.01
@@ -85,8 +86,6 @@ class SumanEndoscopeHold(Node):
         self,
         joint_state_topic: str,
         arm_tf_topic: str,
-        main_frame: str,
-        tool_frame: str,
     ) -> None:
         super().__init__("suman_hold_endoscope")
         self.publisher = self.create_publisher(
@@ -117,7 +116,7 @@ class SumanEndoscopeHold(Node):
         self._hand_close_progress_detected = False
         self._hand_close_contact_detected = False
         self.cmd_id = 0
-        self._publish_tool_frame(main_frame, tool_frame)
+        self._publish_tool_frame()
 
         self.create_subscription(
             JointState,
@@ -138,11 +137,11 @@ class SumanEndoscopeHold(Node):
             f"Expected arm TF: {RIGHT_ARM_TF_PARENT}->{RIGHT_ARM_TF_CHILD}."
         )
 
-    def _publish_tool_frame(self, main_frame: str, tool_frame: str) -> None:
+    def _publish_tool_frame(self) -> None:
         transform = TransformStamped()
         transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = main_frame
-        transform.child_frame_id = tool_frame
+        transform.header.frame_id = RIGHT_ARM_TF_CHILD
+        transform.child_frame_id = TOOL_TIP_FRAME
         (
             transform.transform.translation.x,
             transform.transform.translation.y,
@@ -152,15 +151,15 @@ class SumanEndoscopeHold(Node):
         self._static_transform_broadcaster = StaticTransformBroadcaster(self)
         self._static_transform_broadcaster.sendTransform(transform)
         self.get_logger().info(
-            f"Published TF {main_frame} -> {tool_frame}: "
+            f"Published TF {RIGHT_ARM_TF_CHILD} -> {TOOL_TIP_FRAME}: "
             f"x={TOOL_FRAME_TRANSLATION[0]:.2f} m, "
             f"y={TOOL_FRAME_TRANSLATION[1]:.2f} m, "
             f"z={TOOL_FRAME_TRANSLATION[2]:.2f} m; "
             "orientation unchanged."
         )
         print(
-            "\nRepere main : origine (0, 0, 0)\n"
-            f"Repere outil ({tool_frame}) : "
+            f"\nRepere outil {TOOL_TIP_FRAME}, enfant de "
+            f"{RIGHT_ARM_TF_CHILD} : "
             f"x={TOOL_FRAME_TRANSLATION[0]:+.2f} m, "
             f"y={TOOL_FRAME_TRANSLATION[1]:+.2f} m, "
             f"z={TOOL_FRAME_TRANSLATION[2]:+.2f} m\n"
@@ -504,7 +503,7 @@ def _rotate_quaternion(
     delta = [math.cos(half_angle), 0.0, 0.0, 0.0]
     delta[axis_index + 1] = math.sin(half_angle)
     return _normalize_quaternion(
-        _quaternion_multiply(delta, _normalize_quaternion(quaternion))
+        _quaternion_multiply(_normalize_quaternion(quaternion), delta)
     )
 
 
@@ -519,6 +518,58 @@ def _rotate_vector(
         conjugate,
     )
     return rotated[1:]
+
+
+def _compose_pose(base_pose: List[float], relative_pose: List[float]) -> List[float]:
+    base_orientation = _normalize_quaternion(base_pose[3:])
+    translated_position = _rotate_vector(base_orientation, relative_pose[:3])
+    orientation = _normalize_quaternion(
+        _quaternion_multiply(
+            base_orientation,
+            _normalize_quaternion(relative_pose[3:]),
+        )
+    )
+    return [
+        base_pose[index] + translated_position[index]
+        for index in range(3)
+    ] + orientation
+
+
+def _inverse_pose(pose: List[float]) -> List[float]:
+    orientation = _normalize_quaternion(pose[3:])
+    inverse_orientation = [
+        orientation[0],
+        -orientation[1],
+        -orientation[2],
+        -orientation[3],
+    ]
+    inverse_position = _rotate_vector(
+        inverse_orientation,
+        [-component for component in pose[:3]],
+    )
+    return inverse_position + inverse_orientation
+
+
+def _tool_tip_pose_from_arm_pose(arm_pose: List[float]) -> List[float]:
+    arm_to_tool_tip = [
+        *TOOL_FRAME_TRANSLATION,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    return _compose_pose(arm_pose, arm_to_tool_tip)
+
+
+def _arm_pose_from_tool_tip_pose(tool_tip_pose: List[float]) -> List[float]:
+    arm_to_tool_tip = [
+        *TOOL_FRAME_TRANSLATION,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    return _compose_pose(tool_tip_pose, _inverse_pose(arm_to_tool_tip))
 
 
 def _quaternion_angular_error(
@@ -738,7 +789,7 @@ def _run_motion_menu(
     print(
         "\nMouvements de l'endoscope : translations de +10 cm ou rotations de "
         f"+/-{CARTESIAN_ROTATION_DEGREES:g} degres, puis retour a la pose de depart.\n"
-        "Axes exprimes dans le repere waist_link_4 (pose TF de l'avant-bras droit)."
+        f"Axes exprimes dans le repere {TOOL_TIP_FRAME}."
     )
     while rclpy.ok():
         try:
@@ -789,8 +840,8 @@ def _run_motion_menu(
             print("Mouvement annule.")
             continue
 
-        start = _wait_for_arm_pose(node, executor)
-        if start is None:
+        start_arm_pose = _wait_for_arm_pose(node, executor)
+        if start_arm_pose is None:
             if node.count_publishers(node.arm_tf_topic) == 0:
                 print(
                     f"Aucun publisher sur {node.arm_tf_topic} ; "
@@ -813,57 +864,46 @@ def _run_motion_menu(
                 )
             return False
 
-        target = list(start)
-        start_tip_offset = _rotate_vector(
-            start[3:],
-            list(TOOL_FRAME_TRANSLATION),
-        )
-        start_tip_position = [
-            start[index] + start_tip_offset[index]
-            for index in range(3)
-        ]
-        desired_tip_position = list(start_tip_position)
+        start_tool_tip_pose = _tool_tip_pose_from_arm_pose(start_arm_pose)
+        target_tool_tip_pose = list(start_tool_tip_pose)
         if is_rotation:
-            target[3:] = _rotate_quaternion(
-                start[3:],
+            target_tool_tip_pose[3:] = _rotate_quaternion(
+                start_tool_tip_pose[3:],
                 ROTATION_AXES[axis],
                 math.radians(rotation_degrees),
             )
-            rotated_tip_offset = _rotate_vector(
-                target[3:],
-                list(TOOL_FRAME_TRANSLATION),
-            )
-            target[:3] = [
-                desired_tip_position[index] - rotated_tip_offset[index]
-                for index in range(3)
-            ]
         else:
-            desired_tip_position[TRANSLATION_AXES[axis]] += (
+            local_translation = [0.0, 0.0, 0.0]
+            local_translation[TRANSLATION_AXES[axis]] = (
                 CARTESIAN_TRANSLATION_METERS
             )
-            rotated_tip_offset = _rotate_vector(
-                target[3:],
-                list(TOOL_FRAME_TRANSLATION),
+            translated_in_reference = _rotate_vector(
+                start_tool_tip_pose[3:],
+                local_translation,
             )
-            target[:3] = [
-                desired_tip_position[index] - rotated_tip_offset[index]
+            target_tool_tip_pose[:3] = [
+                start_tool_tip_pose[index] + translated_in_reference[index]
                 for index in range(3)
             ]
+        target_arm_pose = _arm_pose_from_tool_tip_pose(target_tool_tip_pose)
         print(
-            f"Pose initiale xyz=({start[0]:.4f}, {start[1]:.4f}, "
-            f"{start[2]:.4f}) m, quaternion(wxyz)=({start[3]:.4f}, "
-            f"{start[4]:.4f}, {start[5]:.4f}, {start[6]:.4f}).\n"
-            f"Pointe initiale xyz=({start_tip_position[0]:.3f}, "
-            f"{start_tip_position[1]:.3f}, {start_tip_position[2]:.3f}) m.\n"
-            f"Mouvement : {operation_label}; pose cible du bras xyz="
-            f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f}) m, "
-            f"pointe cible xyz=({desired_tip_position[0]:.3f}, "
-            f"{desired_tip_position[1]:.3f}, {desired_tip_position[2]:.3f}) m, "
-            f"quaternion(wxyz)=({target[3]:.4f}, {target[4]:.4f}, "
-            f"{target[5]:.4f}, {target[6]:.4f})."
+            f"Pose initiale de {RIGHT_ARM_TF_CHILD} xyz="
+            f"({start_arm_pose[0]:.4f}, {start_arm_pose[1]:.4f}, "
+            f"{start_arm_pose[2]:.4f}) m.\n"
+            f"Pose initiale de {TOOL_TIP_FRAME} xyz="
+            f"({start_tool_tip_pose[0]:.3f}, {start_tool_tip_pose[1]:.3f}, "
+            f"{start_tool_tip_pose[2]:.3f}) m.\n"
+            f"Mouvement : {operation_label}; pose cible de {TOOL_TIP_FRAME} "
+            f"xyz=({target_tool_tip_pose[0]:.3f}, "
+            f"{target_tool_tip_pose[1]:.3f}, {target_tool_tip_pose[2]:.3f}) m; "
+            f"pose cible de {RIGHT_ARM_TF_CHILD} xyz="
+            f"({target_arm_pose[0]:.3f}, {target_arm_pose[1]:.3f}, "
+            f"{target_arm_pose[2]:.3f}) m, quaternion(wxyz)="
+            f"({target_arm_pose[3]:.4f}, {target_arm_pose[4]:.4f}, "
+            f"{target_arm_pose[5]:.4f}, {target_arm_pose[6]:.4f})."
         )
-        node._publish_cartesian_target(target)
-        if not _wait_for_cartesian_target(node, executor, target):
+        node._publish_cartesian_target(target_arm_pose)
+        if not _wait_for_cartesian_target(node, executor, target_arm_pose):
             print(
                 "La cible n'a pas ete confirmee par le retour TF dans le delai "
                 "imparti ; aucun retour automatique n'est envoye."
@@ -879,8 +919,9 @@ def _run_motion_menu(
             )
             return True
 
-        node._publish_cartesian_target(start)
-        if not _wait_for_cartesian_target(node, executor, start):
+        return_arm_pose = _arm_pose_from_tool_tip_pose(start_tool_tip_pose)
+        node._publish_cartesian_target(return_arm_pose)
+        if not _wait_for_cartesian_target(node, executor, return_arm_pose):
             print(
                 "Le retour n'a pas ete confirme par le retour TF dans le delai "
                 "imparti ; arret du menu de mouvement."
@@ -914,21 +955,7 @@ def main(args=None) -> None:
         default="",
         help="Arm TF feedback topic; overrides the topic derived from --robot-id.",
     )
-    parser.add_argument(
-        "--main-frame",
-        default="main",
-        help="Parent TF frame for the endoscope frame (default: main).",
-    )
-    parser.add_argument(
-        "--tool-frame",
-        default="outil_endoscope",
-        help="Child TF frame for the endoscope (default: outil_endoscope).",
-    )
     parsed_args, _ = parser.parse_known_args(args=args)
-    if not parsed_args.main_frame.strip() or not parsed_args.tool_frame.strip():
-        parser.error("--main-frame et --tool-frame ne peuvent pas etre vides.")
-    if parsed_args.main_frame == parsed_args.tool_frame:
-        parser.error("--main-frame et --tool-frame doivent etre differents.")
 
     if not _confirm_endoscope_ready():
         print("Lancement annule.")
@@ -952,8 +979,6 @@ def main(args=None) -> None:
     node = SumanEndoscopeHold(
         joint_state_topic,
         arm_tf_topic,
-        parsed_args.main_frame,
-        parsed_args.tool_frame,
     )
     executor = MultiThreadedExecutor()
     executor.add_node(node)
