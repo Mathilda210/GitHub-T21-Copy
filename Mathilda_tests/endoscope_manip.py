@@ -67,7 +67,33 @@ JOINT_TOLERANCE = 0.10
 CARTESIAN_TOLERANCE = 0.01
 FEEDBACK_TIMEOUT = 30.0
 MOTION_TIMEOUT = 60.0
-TRANSLATION_AXES = {"x": 0, "y": 1, "z": 2}
+TRANSLATION_AXES: Dict[str, Tuple[float, float, float]] = {
+    "x": (1.0, 0.0, 0.0),
+    "y": (0.0, 1.0, 0.0),
+    "z": (0.0, 0.0, 1.0),
+}
+
+
+def _rotate_vector_by_quaternion(
+    vector: Sequence[float],
+    quaternion: Sequence[float],
+) -> List[float]:
+    """Convert a vector from tool-local coordinates to the command frame."""
+    q_w, q_x, q_y, q_z = quaternion
+    vector_x, vector_y, vector_z = vector
+
+    cross_x = q_y * vector_z - q_z * vector_y
+    cross_y = q_z * vector_x - q_x * vector_z
+    cross_z = q_x * vector_y - q_y * vector_x
+    cross_x *= 2.0
+    cross_y *= 2.0
+    cross_z *= 2.0
+
+    return [
+        vector_x + q_w * cross_x + q_y * cross_z - q_z * cross_y,
+        vector_y + q_w * cross_y + q_z * cross_x - q_x * cross_z,
+        vector_z + q_w * cross_z + q_x * cross_y - q_y * cross_x,
+    ]
 
 
 class EndoscopeManipulation(Node):
@@ -283,8 +309,7 @@ def _move_cartesian(
     pose: Sequence[float],
 ) -> bool:
     if not _confirm(
-        "Confirmer la translation du poignet droit de 10 cm "
-        f"dans le repere {ARM_COMMAND_FRAME}"
+        f"Confirmer la translation de 10 cm selon les axes de {TOOL_FRAME}"
     ):
         return False
 
@@ -317,7 +342,7 @@ def _translation_menu(
     while rclpy.ok():
         print(
             "\nActions possibles :\n"
-            f"  x / y / z : translation +10 cm dans {ARM_COMMAND_FRAME}\n"
+            f"  x / y / z : translation +10 cm selon les axes de {TOOL_FRAME}\n"
             "  h         : revenir au home du bras en gardant la saisie\n"
             "  r         : revenir au home puis relacher l'endoscope\n"
             "  q         : quitter sans autre mouvement"
@@ -371,7 +396,12 @@ def _translation_menu(
                 "sur le topic robot."
             )
         target = list(current_pose)
-        target[TRANSLATION_AXES[choice]] += TRANSLATION_METERS
+        tool_axis_in_command_frame = _rotate_vector_by_quaternion(
+            TRANSLATION_AXES[choice],
+            current_pose[3:7],
+        )
+        for index, component in enumerate(tool_axis_in_command_frame):
+            target[index] += TRANSLATION_METERS * component
         _move_cartesian(node, target)
 
 
