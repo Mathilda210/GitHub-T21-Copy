@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et translations du bras droit.
-Version demandé avec publication de TF pour rviz et commande de mouvement en cartésien."""
+"""Saisie interactive d'un endoscope et translations du bras droit."""
 
 import argparse
 import os
+import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -57,9 +57,11 @@ ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
 ]
 
 BASE_FRAME = "waist_link_0"
+ARM_COMMAND_FRAME = "waist_link_4"
 ARM_FRAME = "right_arm_link_6"
 TOOL_FRAME = "tool_tip"
 TOOL_OFFSET_Z = 0.20
+TF_REPUBLISH_PERIOD = 0.1
 TRANSLATION_METERS = 0.10
 JOINT_TOLERANCE = 0.10
 CARTESIAN_TOLERANCE = 0.01
@@ -79,6 +81,7 @@ class EndoscopeManipulation(Node):
         self._joint_positions: Dict[str, float] = {}
         self._arm_pose: Optional[List[float]] = None
         self._arm_pose_received_at = 0.0
+        self._arm_transforms: Dict[str, TransformStamped] = {}
         self._command_id = 0
 
         self.create_subscription(JointState, joint_topic, self._joint_state_cb, 10)
@@ -90,6 +93,7 @@ class EndoscopeManipulation(Node):
         )
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self.create_timer(TF_REPUBLISH_PERIOD, self._republish_arm_transform)
         self._publish_tool_transform()
 
     def _joint_state_cb(self, msg: JointState) -> None:
@@ -99,18 +103,18 @@ class EndoscopeManipulation(Node):
         for transform in msg.transforms:
             parent = transform.header.frame_id.lstrip("/")
             child = transform.child_frame_id.lstrip("/")
-            if parent != BASE_FRAME or child != ARM_FRAME:
+            if parent not in (BASE_FRAME, ARM_COMMAND_FRAME) or child != ARM_FRAME:
                 continue
 
-            # La source robot est un topic dédié : on relaie cette TF sur /tf
-            # pour que RViz voie la chaîne complète jusqu'à tool_tip.
             live_tf = TransformStamped()
             live_tf.header = transform.header
             live_tf.header.frame_id = parent
             live_tf.child_frame_id = child
             live_tf.transform = transform.transform
-            self._tf_broadcaster.sendTransform(live_tf)
+            self._arm_transforms[parent] = live_tf
 
+            if parent != ARM_COMMAND_FRAME:
+                continue
             translation = transform.transform.translation
             rotation = transform.transform.rotation
             self._arm_pose = [
@@ -123,6 +127,20 @@ class EndoscopeManipulation(Node):
                 float(rotation.z),
             ]
             self._arm_pose_received_at = time.monotonic()
+
+    def _republish_arm_transform(self) -> None:
+        transform = self._arm_transforms.get(ARM_COMMAND_FRAME)
+        if transform is None:
+            transform = self._arm_transforms.get(BASE_FRAME)
+        if transform is None:
+            return
+
+        live_tf = TransformStamped()
+        live_tf.header.stamp = self.get_clock().now().to_msg()
+        live_tf.header.frame_id = transform.header.frame_id
+        live_tf.child_frame_id = transform.child_frame_id
+        live_tf.transform = transform.transform
+        self._tf_broadcaster.sendTransform(live_tf)
 
     def _publish_tool_transform(self) -> None:
         tool_tf = TransformStamped()
@@ -170,7 +188,7 @@ class EndoscopeManipulation(Node):
         command.max_acceleration = [ArmConstraintParameters(values=[0.3])]
         command.max_jerk = [ArmConstraintParameters(values=[5.0])]
         command.is_whole_body = False
-        command.reference_frame = BASE_FRAME
+        command.reference_frame = ARM_COMMAND_FRAME
         command.pos_tolerance = CARTESIAN_TOLERANCE
         command.vel_tolerance = 0.01
         self._publish(command)
@@ -211,21 +229,19 @@ def _confirm(action: str) -> bool:
 
 
 def _spin_until(
-    executor: SingleThreadedExecutor,
     predicate: Callable[[], bool],
     timeout: float,
 ) -> bool:
     deadline = time.monotonic() + timeout
     while rclpy.ok() and time.monotonic() < deadline:
-        executor.spin_once(timeout_sec=0.1)
         if predicate():
             return True
+        time.sleep(0.1)
     return False
 
 
 def _move_joints(
     node: EndoscopeManipulation,
-    executor: SingleThreadedExecutor,
     description: str,
     arm_index: int,
     joints: Sequence[str],
@@ -243,7 +259,7 @@ def _move_joints(
             for name, value in zip(joints, target)
         )
 
-    if not _spin_until(executor, target_reached, FEEDBACK_TIMEOUT):
+    if not _spin_until(target_reached, FEEDBACK_TIMEOUT):
         raise TimeoutError(
             f"Retour articulaire non conforme apres {FEEDBACK_TIMEOUT:.0f} s "
             f"pour l'action : {description}."
@@ -254,10 +270,9 @@ def _move_joints(
 
 def _wait_for_arm_pose(
     node: EndoscopeManipulation,
-    executor: SingleThreadedExecutor,
 ) -> Optional[List[float]]:
     if node._arm_pose is None and not _spin_until(
-        executor, lambda: node._arm_pose is not None, FEEDBACK_TIMEOUT
+        lambda: node._arm_pose is not None, FEEDBACK_TIMEOUT
     ):
         return None
     return list(node._arm_pose) if node._arm_pose is not None else None
@@ -265,12 +280,11 @@ def _wait_for_arm_pose(
 
 def _move_cartesian(
     node: EndoscopeManipulation,
-    executor: SingleThreadedExecutor,
     pose: Sequence[float],
 ) -> bool:
     if not _confirm(
         "Confirmer la translation du poignet droit de 10 cm "
-        "dans le repere waist_link_0"
+        f"dans le repere {ARM_COMMAND_FRAME}"
     ):
         return False
 
@@ -278,18 +292,19 @@ def _move_cartesian(
     node.publish_cartesian_target(pose)
     deadline = time.monotonic() + MOTION_TIMEOUT
     while rclpy.ok() and time.monotonic() < deadline:
-        executor.spin_once(timeout_sec=0.1)
         current = node._arm_pose
         if (
             current is None
             or node._arm_pose_received_at <= start_received_at
             or node._arm_pose_received_at < time.monotonic() - 1.0
         ):
+            time.sleep(0.1)
             continue
         error = max(abs(current[index] - pose[index]) for index in range(3))
         if error <= CARTESIAN_TOLERANCE:
             print("Translation confirmee par la TF du bras.")
             return True
+        time.sleep(0.1)
     raise TimeoutError(
         "La nouvelle pose du bras n'a pas confirme la cible cartesienne "
         f"en {MOTION_TIMEOUT:.0f} s. Aucun retour automatique n'est envoye."
@@ -298,12 +313,11 @@ def _move_cartesian(
 
 def _translation_menu(
     node: EndoscopeManipulation,
-    executor: SingleThreadedExecutor,
 ) -> None:
     while rclpy.ok():
         print(
             "\nActions possibles :\n"
-            "  x / y / z : translation +10 cm dans waist_link_0\n"
+            f"  x / y / z : translation +10 cm dans {ARM_COMMAND_FRAME}\n"
             "  h         : revenir au home du bras en gardant la saisie\n"
             "  r         : revenir au home puis relacher l'endoscope\n"
             "  q         : quitter sans autre mouvement"
@@ -319,7 +333,6 @@ def _translation_menu(
         if choice in ("h", "home"):
             if not _move_joints(
                 node,
-                executor,
                 "Revenir au home du bras droit",
                 RIGHT_ARM_INDEX,
                 RIGHT_ARM_JOINTS,
@@ -330,7 +343,6 @@ def _translation_menu(
         if choice in ("r", "relacher", "release"):
             returned_home = _move_joints(
                 node,
-                executor,
                 "Revenir au home du bras droit en gardant l'endoscope",
                 RIGHT_ARM_INDEX,
                 RIGHT_ARM_JOINTS,
@@ -340,7 +352,6 @@ def _translation_menu(
                 continue
             opened = _move_joints(
                 node,
-                executor,
                 "Relacher l'endoscope en ouvrant la main droite",
                 RIGHT_HAND_INDEX,
                 RIGHT_HAND_JOINTS,
@@ -353,14 +364,15 @@ def _translation_menu(
             print("Choix invalide ; saisir x, y, z, h, r ou q.")
             continue
 
-        current_pose = _wait_for_arm_pose(node, executor)
+        current_pose = _wait_for_arm_pose(node)
         if current_pose is None:
             raise TimeoutError(
-                f"TF {BASE_FRAME} -> {ARM_FRAME} introuvable sur le topic robot."
+                f"TF {ARM_COMMAND_FRAME} -> {ARM_FRAME} introuvable "
+                "sur le topic robot."
             )
         target = list(current_pose)
         target[TRANSLATION_AXES[choice]] += TRANSLATION_METERS
-        _move_cartesian(node, executor, target)
+        _move_cartesian(node, target)
 
 
 def main(args=None) -> None:
@@ -396,10 +408,11 @@ def main(args=None) -> None:
     node = EndoscopeManipulation(joint_topic, tf_topic)
     executor = SingleThreadedExecutor()
     executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
     try:
         if not _move_joints(
             node,
-            executor,
             "Placer le bras droit en position home",
             RIGHT_ARM_INDEX,
             RIGHT_ARM_JOINTS,
@@ -408,7 +421,6 @@ def main(args=None) -> None:
             return
         if not _move_joints(
             node,
-            executor,
             "Ouvrir la main droite avant la saisie",
             RIGHT_HAND_INDEX,
             RIGHT_HAND_JOINTS,
@@ -419,7 +431,6 @@ def main(args=None) -> None:
         for description, pose in ENDOSCOPE_GRASP:
             if not _move_joints(
                 node,
-                executor,
                 f"{description.capitalize()} (pose mesuree)",
                 RIGHT_HAND_INDEX,
                 RIGHT_HAND_JOINTS,
@@ -433,19 +444,20 @@ def main(args=None) -> None:
             f"sur l'axe z local de {ARM_FRAME}."
         )
         print(
-            f"En attente de la TF {BASE_FRAME} -> {ARM_FRAME}; "
+            f"En attente de la TF {ARM_COMMAND_FRAME} -> {ARM_FRAME}; "
             "verifiez que le topic TF du robot est disponible."
         )
-        if _wait_for_arm_pose(node, executor) is None:
+        if _wait_for_arm_pose(node) is None:
             raise TimeoutError(
-                f"TF {BASE_FRAME} -> {ARM_FRAME} non recue en "
+                f"TF {ARM_COMMAND_FRAME} -> {ARM_FRAME} non recue en "
                 f"{FEEDBACK_TIMEOUT:.0f} s."
             )
-        _translation_menu(node, executor)
+        _translation_menu(node)
     except KeyboardInterrupt:
         print("\nArret demande ; aucun mouvement supplementaire ne sera envoye.")
     finally:
         executor.shutdown()
+        spin_thread.join()
         node.destroy_node()
         rclpy.shutdown()
 
