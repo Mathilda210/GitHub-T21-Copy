@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et translations du bras droit."""
+"""Saisie interactive d'un endoscope et mouvements du bras droit."""
 
 import argparse
+import math
 import os
 import threading
 import time
@@ -63,8 +64,10 @@ TOOL_FRAME = "tool_tip"
 TOOL_OFFSET_Z = 0.20
 TF_REPUBLISH_PERIOD = 0.1
 TRANSLATION_METERS = 0.10
+ROTATION_DEGREES = 10.0
 JOINT_TOLERANCE = 0.10
 CARTESIAN_TOLERANCE = 0.01
+CARTESIAN_ANGULAR_TOLERANCE = math.radians(2.0)
 FEEDBACK_TIMEOUT = 30.0
 MOTION_TIMEOUT = 60.0
 TRANSLATION_AXES: Dict[str, Tuple[float, float, float]] = {
@@ -72,6 +75,52 @@ TRANSLATION_AXES: Dict[str, Tuple[float, float, float]] = {
     "y": (0.0, 1.0, 0.0),
     "z": (0.0, 0.0, 1.0),
 }
+
+
+def _multiply_quaternions(
+    first: Sequence[float],
+    second: Sequence[float],
+) -> List[float]:
+    """Multiply quaternions in [w, x, y, z] order."""
+    first_w, first_x, first_y, first_z = first
+    second_w, second_x, second_y, second_z = second
+    return [
+        first_w * second_w
+        - first_x * second_x
+        - first_y * second_y
+        - first_z * second_z,
+        first_w * second_x
+        + first_x * second_w
+        + first_y * second_z
+        - first_z * second_y,
+        first_w * second_y
+        - first_x * second_z
+        + first_y * second_w
+        + first_z * second_x,
+        first_w * second_z
+        + first_x * second_y
+        - first_y * second_x
+        + first_z * second_w,
+    ]
+
+
+def _quaternion_angular_error(
+    first: Sequence[float],
+    second: Sequence[float],
+) -> float:
+    """Return the shortest angle between two [w, x, y, z] quaternions."""
+    first_norm = math.sqrt(sum(component * component for component in first))
+    second_norm = math.sqrt(sum(component * component for component in second))
+    if first_norm == 0.0 or second_norm == 0.0:
+        raise ValueError("Un quaternion nul ne definit pas une orientation.")
+    dot = abs(
+        sum(
+            first_component * second_component
+            for first_component, second_component in zip(first, second)
+        )
+        / (first_norm * second_norm)
+    )
+    return 2.0 * math.acos(min(1.0, dot))
 
 
 def _rotate_vector_by_quaternion(
@@ -307,10 +356,10 @@ def _wait_for_arm_pose(
 def _move_cartesian(
     node: EndoscopeManipulation,
     pose: Sequence[float],
+    description: str,
+    check_orientation: bool = False,
 ) -> bool:
-    if not _confirm(
-        f"Confirmer la translation de 10 cm selon les axes de {TOOL_FRAME}"
-    ):
+    if not _confirm(f"Confirmer {description}"):
         return False
 
     start_received_at = node._arm_pose_received_at
@@ -326,8 +375,13 @@ def _move_cartesian(
             time.sleep(0.1)
             continue
         error = max(abs(current[index] - pose[index]) for index in range(3))
-        if error <= CARTESIAN_TOLERANCE:
-            print("Translation confirmee par la TF du bras.")
+        orientation_reached = (
+            not check_orientation
+            or _quaternion_angular_error(current[3:7], pose[3:7])
+            <= CARTESIAN_ANGULAR_TOLERANCE
+        )
+        if error <= CARTESIAN_TOLERANCE and orientation_reached:
+            print("Mouvement cartesien confirme par la TF du bras.")
             return True
         time.sleep(0.1)
     raise TimeoutError(
@@ -342,7 +396,12 @@ def _translation_menu(
     while rclpy.ok():
         print(
             "\nActions possibles :\n"
-            f"  x / y / z : translation +10 cm selon les axes de {TOOL_FRAME}\n"
+            f"  x+ / x-   : translation +/-10 cm selon l'axe x de {TOOL_FRAME}\n"
+            f"  y+ / y-   : translation +/-10 cm selon l'axe y de {TOOL_FRAME}\n"
+            f"  z+ / z-   : translation +/-10 cm selon l'axe z de {TOOL_FRAME}\n"
+            f"  rx+ / rx- : rotation +/-10 degres autour de x ({TOOL_FRAME})\n"
+            f"  ry+ / ry- : rotation +/-10 degres autour de y ({TOOL_FRAME})\n"
+            f"  rz+ / rz- : rotation +/-10 degres autour de z ({TOOL_FRAME})\n"
             "  h         : revenir au home du bras en gardant la saisie\n"
             "  r         : revenir au home puis relacher l'endoscope\n"
             "  q         : quitter sans autre mouvement"
@@ -385,8 +444,29 @@ def _translation_menu(
             if opened:
                 return
             continue
-        if choice not in TRANSLATION_AXES:
-            print("Choix invalide ; saisir x, y, z, h, r ou q.")
+        translation_axis: Optional[str] = None
+        direction = 1.0
+        if choice in TRANSLATION_AXES:
+            translation_axis = choice
+        elif (
+            len(choice) == 2
+            and choice[0] in TRANSLATION_AXES
+            and choice[1] in "+-"
+        ):
+            translation_axis = choice[0]
+            direction = 1.0 if choice[1] == "+" else -1.0
+        elif (
+            len(choice) == 3
+            and choice[0] == "r"
+            and choice[1] in TRANSLATION_AXES
+            and choice[2] in "+-"
+        ):
+            direction = 1.0 if choice[2] == "+" else -1.0
+        else:
+            print(
+                "Choix invalide ; saisir x+/x-, y+/y-, z+/z-, "
+                "rx+/rx-, ry+/ry-, rz+/rz-, h, r ou q."
+            )
             continue
 
         current_pose = _wait_for_arm_pose(node)
@@ -396,13 +476,39 @@ def _translation_menu(
                 "sur le topic robot."
             )
         target = list(current_pose)
-        tool_axis_in_command_frame = _rotate_vector_by_quaternion(
-            TRANSLATION_AXES[choice],
-            current_pose[3:7],
-        )
-        for index, component in enumerate(tool_axis_in_command_frame):
-            target[index] += TRANSLATION_METERS * component
-        _move_cartesian(node, target)
+        if translation_axis is not None:
+            tool_axis_in_command_frame = _rotate_vector_by_quaternion(
+                TRANSLATION_AXES[translation_axis],
+                current_pose[3:7],
+            )
+            for index, component in enumerate(tool_axis_in_command_frame):
+                target[index] += direction * TRANSLATION_METERS * component
+            sign = "+" if direction > 0 else "-"
+            _move_cartesian(
+                node,
+                target,
+                f"la translation {sign}10 cm selon l'axe "
+                f"{translation_axis} de {TOOL_FRAME}",
+            )
+        else:
+            axis = choice[1]
+            half_angle = math.radians(direction * ROTATION_DEGREES) / 2.0
+            sine = math.sin(half_angle)
+            delta_rotation = [
+                math.cos(half_angle),
+                sine if axis == "x" else 0.0,
+                sine if axis == "y" else 0.0,
+                sine if axis == "z" else 0.0,
+            ]
+            target[3:7] = _multiply_quaternions(current_pose[3:7], delta_rotation)
+            sign = "+" if direction > 0 else "-"
+            _move_cartesian(
+                node,
+                target,
+                f"la rotation {sign}{ROTATION_DEGREES:.0f} degres autour de "
+                f"l'axe {axis} de {TOOL_FRAME}",
+                check_orientation=True,
+            )
 
 
 def main(args=None) -> None:
