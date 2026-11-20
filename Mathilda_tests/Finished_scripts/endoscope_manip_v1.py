@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et mouvements du bras droit."""
+"""Saisie interactive d'un endoscope et mouvements du bras droit.
+Translation et rotation autour de l'axe de l'endoscope, avec validation
+Probleme: repere outil mal defini """
 
 import argparse
 import math
