@@ -73,7 +73,7 @@ ARM_CHAIN_FRAMES = [f"right_arm_link_{index}" for index in range(7)] + [
     PALM_FRAME
 ]
 TOOL_FRAME = "tool_tip"
-TOOL_OFFSET_Z = 0.20
+TOOL_OFFSET_IN_PALM = (0.25, 0.01, 0.0)
 TF_REPUBLISH_PERIOD = 0.1
 TRANSLATION_METERS = 0.10
 ROTATION_DEGREES = 10.0
@@ -289,15 +289,18 @@ def _rotate_vector_by_quaternion(
 def _pose_rotated_around_tool_tip(
     pose: Sequence[float],
     target_orientation: Sequence[float],
+    tool_offset_in_arm: Sequence[float],
 ) -> List[float]:
     """Build an arm pose that rotates around the fixed tool-tip position."""
-    tool_offset = (0.0, 0.0, TOOL_OFFSET_Z)
-    current_tip_offset = _rotate_vector_by_quaternion(tool_offset, pose[3:7])
+    current_tip_offset = _rotate_vector_by_quaternion(
+        tool_offset_in_arm,
+        pose[3:7],
+    )
     tool_tip_position = [
         pose[index] + current_tip_offset[index] for index in range(3)
     ]
     target_tip_offset = _rotate_vector_by_quaternion(
-        tool_offset,
+        tool_offset_in_arm,
         target_orientation,
     )
     return [
@@ -323,6 +326,17 @@ class EndoscopeManipulation(Node):
         self._arm_pose: Optional[List[float]] = None
         self._arm_pose_received_at = 0.0
         self._urdf_joints = _load_urdf_joints(urdf_path)
+        palm_joint_name = RIGHT_ARM_FRAME_JOINTS[-1]
+        palm_pose = _joint_pose(
+            self._urdf_joints[palm_joint_name],
+            {},
+            palm_joint_name,
+        )
+        tool_pose_in_palm = list(TOOL_OFFSET_IN_PALM) + [1.0, 0.0, 0.0, 0.0]
+        self._tool_offset_in_arm = _compose_poses(
+            palm_pose,
+            tool_pose_in_palm,
+        )[:3]
         self._joint_state_warning_logged = False
         self._command_id = 0
 
@@ -457,14 +471,19 @@ class EndoscopeManipulation(Node):
     def _publish_tool_transform(self) -> None:
         tool_tf = TransformStamped()
         tool_tf.header.stamp = self.get_clock().now().to_msg()
-        tool_tf.header.frame_id = ARM_FRAME
+        tool_tf.header.frame_id = PALM_FRAME
         tool_tf.child_frame_id = TOOL_FRAME
-        tool_tf.transform.translation.z = TOOL_OFFSET_Z
+        (
+            tool_tf.transform.translation.x,
+            tool_tf.transform.translation.y,
+            tool_tf.transform.translation.z,
+        ) = TOOL_OFFSET_IN_PALM
         tool_tf.transform.rotation.w = 1.0
         self._static_tf_broadcaster.sendTransform(tool_tf)
         self.get_logger().info(
-            f"TF statique publiee : {ARM_FRAME} -> {TOOL_FRAME}, "
-            f"translation locale z={TOOL_OFFSET_Z:.2f} m."
+            f"TF statique publiee : {PALM_FRAME} -> {TOOL_FRAME}, "
+            f"translation locale x={TOOL_OFFSET_IN_PALM[0]:.2f} m, "
+            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m."
         )
 
     def publish_joint_target(self, arm_index: int, target: Sequence[float]) -> None:
@@ -744,6 +763,7 @@ def _translation_menu(
             target = _pose_rotated_around_tool_tip(
                 current_pose,
                 target_orientation,
+                node._tool_offset_in_arm,
             )
             sign = "+" if direction > 0 else "-"
             _move_cartesian(
@@ -838,8 +858,9 @@ def main(args=None) -> None:
                 return
 
         print(
-            f"\nLe repere {TOOL_FRAME} est publie a {TOOL_OFFSET_Z:.2f} m "
-            f"sur l'axe z local de {ARM_FRAME}."
+            f"\nLe repere {TOOL_FRAME} est fixe par rapport a {PALM_FRAME} : "
+            f"x={TOOL_OFFSET_IN_PALM[0]:.2f} m, "
+            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m."
         )
         print(
             f"En attente de la TF {ARM_COMMAND_FRAME} -> {ARM_FRAME}; "
