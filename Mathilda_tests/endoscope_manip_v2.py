@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et mouvements du bras droit.
-Rotation et translations
-Probleme: repere outil mal defini
-Ajout d'autres reperes pour meilleure visualisation dans RViz."""
+"""Saisie interactive d'un endoscope et mouvements du bras droit."""
 
 import argparse
 import math
 import os
 import threading
 import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import rclpy
@@ -63,6 +63,15 @@ ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
 BASE_FRAME = "waist_link_0"
 ARM_COMMAND_FRAME = "waist_link_4"
 ARM_FRAME = "right_arm_link_6"
+PALM_FRAME = "right_palm_link"
+WAIST_JOINTS = [f"waist_joint_{index}" for index in range(1, 5)]
+RIGHT_ARM_LINK_JOINTS = [
+    f"right_arm_joint_{index}" for index in range(7)
+]
+RIGHT_ARM_FRAME_JOINTS = RIGHT_ARM_LINK_JOINTS + ["right_palm_joint"]
+ARM_CHAIN_FRAMES = [f"right_arm_link_{index}" for index in range(7)] + [
+    PALM_FRAME
+]
 TOOL_FRAME = "tool_tip"
 TOOL_OFFSET_Z = 0.20
 TF_REPUBLISH_PERIOD = 0.1
@@ -78,6 +87,135 @@ TRANSLATION_AXES: Dict[str, Tuple[float, float, float]] = {
     "y": (0.0, 1.0, 0.0),
     "z": (0.0, 0.0, 1.0),
 }
+
+
+@dataclass(frozen=True)
+class JointTransform:
+    parent: str
+    child: str
+    xyz: Tuple[float, float, float]
+    rpy: Tuple[float, float, float]
+    axis: Tuple[float, float, float]
+    joint_type: str
+
+
+def _parse_vector(
+    value: Optional[str],
+    default: Tuple[float, float, float],
+) -> Tuple[float, float, float]:
+    if value is None:
+        return default
+    components = [float(component) for component in value.split()]
+    if len(components) != 3:
+        raise ValueError(f"Un vecteur URDF doit contenir 3 valeurs : {value!r}.")
+    return components[0], components[1], components[2]
+
+
+def _load_urdf_joints(urdf_path: Path) -> Dict[str, JointTransform]:
+    root = ET.parse(str(urdf_path)).getroot()
+    required_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS
+    joints: Dict[str, JointTransform] = {}
+    for joint_name in required_names:
+        element = root.find(f"./joint[@name='{joint_name}']")
+        if element is None:
+            raise ValueError(f"Joint {joint_name!r} absent du fichier {urdf_path}.")
+        parent = element.find("parent")
+        child = element.find("child")
+        if parent is None or child is None:
+            raise ValueError(f"Joint {joint_name!r} sans parent ou enfant dans l'URDF.")
+        origin = element.find("origin")
+        axis = element.find("axis")
+        joints[joint_name] = JointTransform(
+            parent=parent.attrib["link"],
+            child=child.attrib["link"],
+            xyz=_parse_vector(
+                origin.attrib.get("xyz") if origin is not None else None,
+                (0.0, 0.0, 0.0),
+            ),
+            rpy=_parse_vector(
+                origin.attrib.get("rpy") if origin is not None else None,
+                (0.0, 0.0, 0.0),
+            ),
+            axis=_parse_vector(
+                axis.attrib.get("xyz") if axis is not None else None,
+                (1.0, 0.0, 0.0),
+            ),
+            joint_type=element.attrib["type"],
+        )
+
+    expected_chain = [
+        (WAIST_JOINTS[0], BASE_FRAME, "waist_link_1"),
+        ("waist_joint_2", "waist_link_1", "waist_link_2"),
+        ("waist_joint_3", "waist_link_2", "waist_link_3"),
+        (WAIST_JOINTS[3], "waist_link_3", ARM_COMMAND_FRAME),
+        (RIGHT_ARM_LINK_JOINTS[0], ARM_COMMAND_FRAME, ARM_CHAIN_FRAMES[0]),
+    ]
+    expected_chain.extend(
+        (
+            RIGHT_ARM_LINK_JOINTS[index],
+            ARM_CHAIN_FRAMES[index - 1],
+            ARM_CHAIN_FRAMES[index],
+        )
+        for index in range(1, len(RIGHT_ARM_LINK_JOINTS))
+    )
+    expected_chain.append(
+        (RIGHT_ARM_FRAME_JOINTS[-1], ARM_FRAME, PALM_FRAME)
+    )
+    for joint_name, expected_parent, expected_child in expected_chain:
+        joint = joints[joint_name]
+        if (joint.parent, joint.child) != (expected_parent, expected_child):
+            raise ValueError(
+                f"Chaîne URDF inattendue pour {joint_name!r} : "
+                f"{joint.parent} -> {joint.child}."
+            )
+    return joints
+
+
+def _rpy_to_quaternion(rpy: Sequence[float]) -> List[float]:
+    roll, pitch, yaw = rpy
+    half_roll = roll / 2.0
+    half_pitch = pitch / 2.0
+    half_yaw = yaw / 2.0
+    return [
+        math.cos(half_roll) * math.cos(half_pitch) * math.cos(half_yaw)
+        + math.sin(half_roll) * math.sin(half_pitch) * math.sin(half_yaw),
+        math.sin(half_roll) * math.cos(half_pitch) * math.cos(half_yaw)
+        - math.cos(half_roll) * math.sin(half_pitch) * math.sin(half_yaw),
+        math.cos(half_roll) * math.sin(half_pitch) * math.cos(half_yaw)
+        + math.sin(half_roll) * math.cos(half_pitch) * math.sin(half_yaw),
+        math.cos(half_roll) * math.cos(half_pitch) * math.sin(half_yaw)
+        - math.sin(half_roll) * math.sin(half_pitch) * math.cos(half_yaw),
+    ]
+
+
+def _compose_poses(first: Sequence[float], second: Sequence[float]) -> List[float]:
+    rotated_translation = _rotate_vector_by_quaternion(second[:3], first[3:7])
+    return [
+        first[index] + rotated_translation[index] for index in range(3)
+    ] + _multiply_quaternions(first[3:7], second[3:7])
+
+
+def _joint_pose(
+    joint: JointTransform,
+    joint_positions: Dict[str, float],
+    joint_name: str,
+) -> List[float]:
+    orientation = _rpy_to_quaternion(joint.rpy)
+    if joint.joint_type in ("revolute", "continuous"):
+        angle = joint_positions[joint_name] / 2.0
+        axis_norm = math.sqrt(sum(component * component for component in joint.axis))
+        if axis_norm == 0.0:
+            raise ValueError(f"L'axe du joint {joint_name!r} est nul dans l'URDF.")
+        joint_rotation = [
+            math.cos(angle),
+            *(component / axis_norm * math.sin(angle) for component in joint.axis),
+        ]
+        orientation = _multiply_quaternions(orientation, joint_rotation)
+    elif joint.joint_type != "fixed":
+        raise ValueError(
+            f"Type de joint {joint.joint_type!r} non gere pour {joint_name!r}."
+        )
+    return list(joint.xyz) + orientation
 
 
 def _multiply_quaternions(
@@ -171,7 +309,12 @@ def _pose_rotated_around_tool_tip(
 class EndoscopeManipulation(Node):
     """Envoie les commandes et publie les repères utiles à RViz."""
 
-    def __init__(self, joint_topic: str, tf_topic: str) -> None:
+    def __init__(
+        self,
+        joint_topic: str,
+        tf_topic: str,
+        urdf_path: Path,
+    ) -> None:
         super().__init__("endoscope_manipulation")
         self._motion_publisher = self.create_publisher(
             OnlineMotionCommand, ONLINE_MOTION_TOPIC, 10
@@ -179,7 +322,8 @@ class EndoscopeManipulation(Node):
         self._joint_positions: Dict[str, float] = {}
         self._arm_pose: Optional[List[float]] = None
         self._arm_pose_received_at = 0.0
-        self._arm_transforms: Dict[str, TransformStamped] = {}
+        self._urdf_joints = _load_urdf_joints(urdf_path)
+        self._joint_state_warning_logged = False
         self._command_id = 0
 
         self.create_subscription(JointState, joint_topic, self._joint_state_cb, 10)
@@ -191,8 +335,13 @@ class EndoscopeManipulation(Node):
         )
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
-        self.create_timer(TF_REPUBLISH_PERIOD, self._republish_arm_transform)
+        self.create_timer(TF_REPUBLISH_PERIOD, self._publish_arm_chain)
         self._publish_tool_transform()
+        self.get_logger().info(
+            f"TF cinematiques calculees depuis {urdf_path} et les JointState : "
+            f"{BASE_FRAME} -> {ARM_COMMAND_FRAME} -> {ARM_CHAIN_FRAMES[0]} "
+            f"... -> {PALM_FRAME}."
+        )
 
     def _joint_state_cb(self, msg: JointState) -> None:
         self._joint_positions = dict(zip(msg.name, msg.position))
@@ -201,18 +350,9 @@ class EndoscopeManipulation(Node):
         for transform in msg.transforms:
             parent = transform.header.frame_id.lstrip("/")
             child = transform.child_frame_id.lstrip("/")
-            if parent not in (BASE_FRAME, ARM_COMMAND_FRAME) or child != ARM_FRAME:
+            if parent != ARM_COMMAND_FRAME or child != ARM_FRAME:
                 continue
 
-            live_tf = TransformStamped()
-            live_tf.header = transform.header
-            live_tf.header.frame_id = parent
-            live_tf.child_frame_id = child
-            live_tf.transform = transform.transform
-            self._arm_transforms[parent] = live_tf
-
-            if parent != ARM_COMMAND_FRAME:
-                continue
             translation = transform.transform.translation
             rotation = transform.transform.rotation
             self._arm_pose = [
@@ -226,19 +366,93 @@ class EndoscopeManipulation(Node):
             ]
             self._arm_pose_received_at = time.monotonic()
 
-    def _republish_arm_transform(self) -> None:
-        transform = self._arm_transforms.get(ARM_COMMAND_FRAME)
-        if transform is None:
-            transform = self._arm_transforms.get(BASE_FRAME)
-        if transform is None:
+    def _publish_arm_chain(self) -> None:
+        required_joint_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS[:-1]
+        missing_joints = [
+            name for name in required_joint_names if name not in self._joint_positions
+        ]
+        if missing_joints:
+            if not self._joint_state_warning_logged:
+                self.get_logger().warning(
+                    "Publication TF en attente des joints : "
+                    + ", ".join(missing_joints)
+                )
+                self._joint_state_warning_logged = True
             return
 
-        live_tf = TransformStamped()
-        live_tf.header.stamp = self.get_clock().now().to_msg()
-        live_tf.header.frame_id = transform.header.frame_id
-        live_tf.child_frame_id = transform.child_frame_id
-        live_tf.transform = transform.transform
-        self._tf_broadcaster.sendTransform(live_tf)
+        self._joint_state_warning_logged = False
+        now = self.get_clock().now().to_msg()
+        transforms: List[TransformStamped] = []
+
+        waist_pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        for joint_name in WAIST_JOINTS:
+            waist_pose = _compose_poses(
+                waist_pose,
+                _joint_pose(
+                    self._urdf_joints[joint_name],
+                    self._joint_positions,
+                    joint_name,
+                ),
+            )
+        transforms.append(
+            self._transform_from_pose(
+                BASE_FRAME,
+                ARM_COMMAND_FRAME,
+                waist_pose,
+                now,
+            )
+        )
+
+        for joint_name in RIGHT_ARM_LINK_JOINTS:
+            joint = self._urdf_joints[joint_name]
+            transforms.append(
+                self._transform_from_pose(
+                    joint.parent,
+                    joint.child,
+                    _joint_pose(joint, self._joint_positions, joint_name),
+                    now,
+                )
+            )
+
+        palm_joint = self._urdf_joints[RIGHT_ARM_FRAME_JOINTS[-1]]
+        transforms.append(
+            self._transform_from_pose(
+                palm_joint.parent,
+                palm_joint.child,
+                _joint_pose(
+                    palm_joint,
+                    self._joint_positions,
+                    RIGHT_ARM_FRAME_JOINTS[-1],
+                ),
+                now,
+            )
+        )
+        for transform in transforms:
+            self._tf_broadcaster.sendTransform(transform)
+
+    @staticmethod
+    def _transform_from_pose(
+        parent: str,
+        child: str,
+        pose: Sequence[float],
+        stamp,
+    ) -> TransformStamped:
+        transform = TransformStamped()
+        transform.header.stamp = stamp
+        transform.header.frame_id = parent
+        transform.child_frame_id = child
+        (
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            transform.transform.translation.z,
+        ) = pose[:3]
+        (
+            transform.transform.rotation.w,
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+        ) = pose[3:7]
+        return transform
 
     def _publish_tool_transform(self) -> None:
         tool_tf = TransformStamped()
@@ -549,6 +763,8 @@ def main(args=None) -> None:
     parser.add_argument("--robot-id", default=robot_id)
     parser.add_argument("--joint-state-topic", default="")
     parser.add_argument("--arm-tf-topic", default="")
+    default_urdf_path = Path(__file__).resolve().parents[1] / "tora_double_one_x.urdf"
+    parser.add_argument("--urdf-path", default=str(default_urdf_path))
     options, _ = parser.parse_known_args(args=args)
 
     joint_topic = options.joint_state_topic.strip() or (
@@ -571,7 +787,7 @@ def main(args=None) -> None:
         return
 
     rclpy.init(args=args)
-    node = EndoscopeManipulation(joint_topic, tf_topic)
+    node = EndoscopeManipulation(joint_topic, tf_topic, Path(options.urdf_path))
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
