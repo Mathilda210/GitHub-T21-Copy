@@ -763,7 +763,23 @@ def main(args=None) -> None:
     parser.add_argument("--robot-id", default=robot_id)
     parser.add_argument("--joint-state-topic", default="")
     parser.add_argument("--arm-tf-topic", default="")
-    default_urdf_path = Path(__file__).resolve().parents[1] / "tora_double_one_x.urdf"
+    urdf_relative_path = (
+        Path("px_robot_code")
+        / "nav"
+        / "control_location"
+        / "pointcloud2_perception"
+        / "share"
+        / "pointcloud2_perception"
+        / "URDF"
+        / "tora_double_one_x_description"
+        / "urdf"
+        / "tora_double_one_x.urdf"
+    )
+    robot_urdf_path = Path("/home/user") / urdf_relative_path
+    workspace_urdf_path = Path(__file__).resolve().parents[1] / urdf_relative_path
+    default_urdf_path = (
+        robot_urdf_path if robot_urdf_path.is_file() else workspace_urdf_path
+    )
     parser.add_argument("--urdf-path", default=str(default_urdf_path))
     options, _ = parser.parse_known_args(args=args)
 
