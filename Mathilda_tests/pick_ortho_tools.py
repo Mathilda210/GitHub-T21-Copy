@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-"""Pick an object from the table, lift it 20 cm, put it back, and release it."""
+"""Pick an object from the table, lift it 20 cm, put it back, and release it.
+Tests pas concluants pour l'instant... """
 
 import argparse
 import math

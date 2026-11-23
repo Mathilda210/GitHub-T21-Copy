@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Choix interactif de poses mesurées pour la main droite."""
+"""Choix interactif de poses mesurées pour la main droite.
+A TESTER AVEC LA MAIN DROITE UNIQUEMENT, DANS UN ESPACE SÛR ET DÉGAGÉ."""
 
 import argparse
 import os

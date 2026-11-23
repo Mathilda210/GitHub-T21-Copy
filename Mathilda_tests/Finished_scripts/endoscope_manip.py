@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et mouvements du bras droit.
+"""Saisie interactive d'un endoscope et mouvements du bras DROIT.
 L'endoscope doit être positionné dans la main du robot 
 Une fois en main on peut faire des translations de 10cm et 
 des rotations de 10° autour de l'axe du repère tool_tip."""

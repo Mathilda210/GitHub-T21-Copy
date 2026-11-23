@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
-"""Interface graphique Tkinter pour déplacer un endoscope avec ROS 2."""
+"""Saisie interactive d'un endoscope et mouvements du bras GAUCHE.
+L'endoscope doit être positionné dans la main du robot 
+Une fois en main on peut faire des translations de 10cm et 
+des rotations de 10° autour de l'axe du repère tool_tip."""
 
-from dataclasses import dataclass
 import argparse
 import math
 import os
 import threading
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
-from queue import Empty, Queue
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import rclpy
-import tkinter as tk
-from tkinter import messagebox
 from geometry_msgs.msg import TransformStamped
-from px_mc_msgs.msg import (
-    ArmConstraintParameters,
-    OnlineMotionCommand,
-    TrajectoryPoint,
-)
+from px_mc_msgs.msg import ArmConstraintParameters, OnlineMotionCommand, TrajectoryPoint
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -28,19 +24,20 @@ from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
+
 ONLINE_MOTION_TOPIC = "/external/online_motion_command"
-RIGHT_ARM_INDEX = 1
-RIGHT_HAND_INDEX = 5
-RIGHT_ARM_JOINTS = [f"right_arm_joint_{index}" for index in range(7)]
-RIGHT_HAND_JOINTS = [
-    f"right_{finger}_joint_{index}"
+LEFT_ARM_INDEX = 0
+LEFT_HAND_INDEX = 4
+LEFT_ARM_JOINTS = [f"left_arm_joint_{index}" for index in range(7)]
+LEFT_HAND_JOINTS = [
+    f"left_{finger}_joint_{index}"
     for finger in ("index", "middle", "ring", "pinky", "thumb")
     for index in range(3)
 ]
 
-# Pose home droite relevée dans les exemples du robot.
-HOME_RIGHT_ARM = [0.0, -0.4, 0.0, -1.57, 0.0, 0.0, 0.0]
-HAND_OPEN = [0.0] * len(RIGHT_HAND_JOINTS)
+# Pose home gauche relevée dans les exemples du robot.
+HOME_LEFT_ARM = [0.0, 0.4, 0.0, -1.57, 0.0, 0.0, 0.0]
+HAND_OPEN = [0.0] * len(LEFT_HAND_JOINTS)
 
 # Poses de saisie relevées dans Mathilda_tests/Drafts_and_others/poses_3_laparo_hold.
 ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
@@ -68,19 +65,21 @@ ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
 
 BASE_FRAME = "waist_link_0"
 ARM_COMMAND_FRAME = "waist_link_4"
-ARM_FRAME = "right_arm_link_6"
-PALM_FRAME = "right_palm_link"
+ARM_FRAME = "left_arm_link_6"
+PALM_FRAME = "left_palm_link"
 WAIST_JOINTS = [f"waist_joint_{index}" for index in range(1, 5)]
-RIGHT_ARM_LINK_JOINTS = [
-    f"right_arm_joint_{index}" for index in range(7)
+LEFT_ARM_LINK_JOINTS = [
+    f"left_arm_joint_{index}" for index in range(7)
 ]
-RIGHT_ARM_FRAME_JOINTS = RIGHT_ARM_LINK_JOINTS + ["right_palm_joint"]
-ARM_CHAIN_FRAMES = [f"right_arm_link_{index}" for index in range(7)] + [
+LEFT_ARM_FRAME_JOINTS = LEFT_ARM_LINK_JOINTS + ["left_palm_joint"]
+ARM_CHAIN_FRAMES = [f"left_arm_link_{index}" for index in range(7)] + [
     PALM_FRAME
 ]
 TOOL_FRAME = "tool_tip"
 TOOL_OFFSET_IN_PALM = (0.25, 0.01, 0.0)
 TF_REPUBLISH_PERIOD = 0.1
+TRANSLATION_METERS = 0.10
+ROTATION_DEGREES = 10.0
 JOINT_TOLERANCE = 0.10
 CARTESIAN_TOLERANCE = 0.01
 CARTESIAN_ANGULAR_TOLERANCE = math.radians(2.0)
@@ -117,7 +116,7 @@ def _parse_vector(
 
 def _load_urdf_joints(urdf_path: Path) -> Dict[str, JointTransform]:
     root = ET.parse(str(urdf_path)).getroot()
-    required_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS
+    required_names = WAIST_JOINTS + LEFT_ARM_FRAME_JOINTS
     joints: Dict[str, JointTransform] = {}
     for joint_name in required_names:
         element = root.find(f"./joint[@name='{joint_name}']")
@@ -152,18 +151,18 @@ def _load_urdf_joints(urdf_path: Path) -> Dict[str, JointTransform]:
         ("waist_joint_2", "waist_link_1", "waist_link_2"),
         ("waist_joint_3", "waist_link_2", "waist_link_3"),
         (WAIST_JOINTS[3], "waist_link_3", ARM_COMMAND_FRAME),
-        (RIGHT_ARM_LINK_JOINTS[0], ARM_COMMAND_FRAME, ARM_CHAIN_FRAMES[0]),
+        (LEFT_ARM_LINK_JOINTS[0], ARM_COMMAND_FRAME, ARM_CHAIN_FRAMES[0]),
     ]
     expected_chain.extend(
         (
-            RIGHT_ARM_LINK_JOINTS[index],
+            LEFT_ARM_LINK_JOINTS[index],
             ARM_CHAIN_FRAMES[index - 1],
             ARM_CHAIN_FRAMES[index],
         )
-        for index in range(1, len(RIGHT_ARM_LINK_JOINTS))
+        for index in range(1, len(LEFT_ARM_LINK_JOINTS))
     )
     expected_chain.append(
-        (RIGHT_ARM_FRAME_JOINTS[-1], ARM_FRAME, PALM_FRAME)
+        (LEFT_ARM_FRAME_JOINTS[-1], ARM_FRAME, PALM_FRAME)
     )
     for joint_name, expected_parent, expected_child in expected_chain:
         joint = joints[joint_name]
@@ -313,8 +312,8 @@ def _pose_rotated_around_tool_tip(
     ] + list(target_orientation)
 
 
-class EndoscopeManipulation(Node):
-    """Envoie les commandes et publie les repères utiles à RViz."""
+class LeftEndoscopeManipulation(Node):
+    """Envoie les commandes du bras gauche et publie les repères utiles à RViz."""
 
     def __init__(
         self,
@@ -322,7 +321,7 @@ class EndoscopeManipulation(Node):
         tf_topic: str,
         urdf_path: Path,
     ) -> None:
-        super().__init__("endoscope_manipulation")
+        super().__init__("endoscope_manipulation_left")
         self._motion_publisher = self.create_publisher(
             OnlineMotionCommand, ONLINE_MOTION_TOPIC, 10
         )
@@ -330,7 +329,7 @@ class EndoscopeManipulation(Node):
         self._arm_pose: Optional[List[float]] = None
         self._arm_pose_received_at = 0.0
         self._urdf_joints = _load_urdf_joints(urdf_path)
-        palm_joint_name = RIGHT_ARM_FRAME_JOINTS[-1]
+        palm_joint_name = LEFT_ARM_FRAME_JOINTS[-1]
         palm_pose = _joint_pose(
             self._urdf_joints[palm_joint_name],
             {},
@@ -385,7 +384,7 @@ class EndoscopeManipulation(Node):
             self._arm_pose_received_at = time.monotonic()
 
     def _publish_arm_chain(self) -> None:
-        required_joint_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS[:-1]
+        required_joint_names = WAIST_JOINTS + LEFT_ARM_FRAME_JOINTS[:-1]
         missing_joints = [
             name for name in required_joint_names if name not in self._joint_positions
         ]
@@ -421,7 +420,7 @@ class EndoscopeManipulation(Node):
             )
         )
 
-        for joint_name in RIGHT_ARM_LINK_JOINTS:
+        for joint_name in LEFT_ARM_LINK_JOINTS:
             joint = self._urdf_joints[joint_name]
             transforms.append(
                 self._transform_from_pose(
@@ -432,7 +431,7 @@ class EndoscopeManipulation(Node):
                 )
             )
 
-        palm_joint = self._urdf_joints[RIGHT_ARM_FRAME_JOINTS[-1]]
+        palm_joint = self._urdf_joints[LEFT_ARM_FRAME_JOINTS[-1]]
         transforms.append(
             self._transform_from_pose(
                 palm_joint.parent,
@@ -440,7 +439,7 @@ class EndoscopeManipulation(Node):
                 _joint_pose(
                     palm_joint,
                     self._joint_positions,
-                    RIGHT_ARM_FRAME_JOINTS[-1],
+                    LEFT_ARM_FRAME_JOINTS[-1],
                 ),
                 now,
             )
@@ -516,7 +515,7 @@ class EndoscopeManipulation(Node):
 
         command = OnlineMotionCommand()
         command.type = OnlineMotionCommand.CARTESIAN_TRAJECTORY
-        command.target_arm_indices = [RIGHT_ARM_INDEX]
+        command.target_arm_indices = [LEFT_ARM_INDEX]
         command.target_point = [self._cartesian_point(target)]
         command.planner = OnlineMotionCommand.PLANNER_RUCKIG
         command.max_velocity = [ArmConstraintParameters(values=[0.2])]
@@ -576,7 +575,7 @@ def _spin_until(
 
 
 def _move_joints(
-    node: EndoscopeManipulation,
+    node: LeftEndoscopeManipulation,
     description: str,
     arm_index: int,
     joints: Sequence[str],
@@ -604,7 +603,7 @@ def _move_joints(
 
 
 def _wait_for_arm_pose(
-    node: EndoscopeManipulation,
+    node: LeftEndoscopeManipulation,
 ) -> Optional[List[float]]:
     if node._arm_pose is None and not _spin_until(
         lambda: node._arm_pose is not None, FEEDBACK_TIMEOUT
@@ -613,407 +612,175 @@ def _wait_for_arm_pose(
     return list(node._arm_pose) if node._arm_pose is not None else None
 
 
+def _move_cartesian(
+    node: LeftEndoscopeManipulation,
+    pose: Sequence[float],
+    description: str,
+    check_orientation: bool = False,
+) -> bool:
+    if not _confirm(f"Confirmer {description}"):
+        return False
 
-
-TRANSLATION_STEP_METERS = 0.01
-ROTATION_STEP_DEGREES = 5.0
-GUI_POLL_PERIOD_MS = 100
-
-
-class EndoscopeManipulationInterface:
-    """Affiche les commandes et exécute chaque mouvement hors du thread Tk."""
-
-    def __init__(self, node: EndoscopeManipulation) -> None:
-        self.node = node
-        self.root = tk.Tk()
-        self.root.title("Déplacement de l'endoscope")
-        self.root.resizable(False, False)
-        self._busy = False
-        self._jog_stop_event: Optional[threading.Event] = None
-        self._jog_lock = threading.Lock()
-        self._jog_button: Optional[tk.Button] = None
-        self._results: Queue[Tuple[bool, str]] = Queue()
-        self._motion_buttons = []
-        self._status = tk.StringVar(
-            master=self.root,
-            value="Endoscope saisi. Choisissez un déplacement.",
-        )
-
-        self._build_widgets()
-        self.root.protocol("WM_DELETE_WINDOW", self._close)
-        self.root.after(GUI_POLL_PERIOD_MS, self._poll_results)
-
-    def _build_widgets(self) -> None:
-        tk.Label(
-            self.root,
-            text=(
-                "Pas de 1 cm et rotations de 5° "
-                "(maintenir le bouton pour jogger)"
-            ),
-            font=("TkDefaultFont", 12, "bold"),
-            padx=12,
-            pady=12,
-        ).pack()
-
-        translation_frame = tk.LabelFrame(
-            self.root,
-            text="Translation selon les axes de tool_tip",
-            padx=10,
-            pady=8,
-        )
-        translation_frame.pack(fill="x", padx=12, pady=5)
-        for column, axis in enumerate(("x", "y", "z")):
-            tk.Label(translation_frame, text=axis.upper()).grid(
-                row=0,
-                column=column,
-                padx=8,
-                pady=(0, 4),
-            )
-            for row, direction in enumerate((-1.0, 1.0), start=1):
-                sign = "-" if direction < 0 else "+"
-                button = tk.Button(
-                    translation_frame,
-                    text=f"{axis.upper()}{sign}",
-                    width=8,
-                )
-                button.bind(
-                    "<ButtonPress-1>",
-                    lambda event, a=axis, d=direction:
-                    self._start_jog(a, d, False, event.widget),
-                )
-                button.bind("<ButtonRelease-1>", self._stop_jog)
-                button.grid(row=row, column=column, padx=8, pady=3)
-                self._motion_buttons.append(button)
-
-        rotation_frame = tk.LabelFrame(
-            self.root,
-            text="Rotation autour des axes de tool_tip",
-            padx=10,
-            pady=8,
-        )
-        rotation_frame.pack(fill="x", padx=12, pady=5)
-        for column, axis in enumerate(("x", "y", "z")):
-            tk.Label(rotation_frame, text=axis.upper()).grid(
-                row=0,
-                column=column,
-                padx=8,
-                pady=(0, 4),
-            )
-            for row, direction in enumerate((-1.0, 1.0), start=1):
-                sign = "-" if direction < 0 else "+"
-                button = tk.Button(
-                    rotation_frame,
-                    text=f"R{axis.upper()}{sign}",
-                    width=8,
-                )
-                button.bind(
-                    "<ButtonPress-1>",
-                    lambda event, a=axis, d=direction:
-                    self._start_jog(a, d, True, event.widget),
-                )
-                button.bind("<ButtonRelease-1>", self._stop_jog)
-                button.grid(row=row, column=column, padx=8, pady=3)
-                self._motion_buttons.append(button)
-
-        self._home_button = tk.Button(
-            self.root,
-            text="Retour au home (garder l'endoscope)",
-            command=self._return_home,
-        )
-        self._home_button.pack(pady=(8, 4))
-        self._motion_buttons.append(self._home_button)
-
-        tk.Label(
-            self.root,
-            textvariable=self._status,
-            wraplength=480,
-            padx=12,
-            pady=10,
-        ).pack(fill="x")
-
-    def _fresh_arm_pose(self) -> List[float]:
-        pose = self.node._arm_pose
+    start_received_at = node._arm_pose_received_at
+    node.publish_cartesian_target(pose)
+    deadline = time.monotonic() + MOTION_TIMEOUT
+    while rclpy.ok() and time.monotonic() < deadline:
+        current = node._arm_pose
         if (
-            pose is None
-            or self.node._arm_pose_received_at < time.monotonic() - 1.0
+            current is None
+            or node._arm_pose_received_at <= start_received_at
+            or node._arm_pose_received_at < time.monotonic() - 1.0
         ):
-            raise RuntimeError(
-                "Aucune pose récente du bras n'est disponible. "
-                "Vérifiez le topic TF du robot."
-            )
-        return list(pose)
-
-    def _start_jog(
-        self,
-        axis: str,
-        direction: float,
-        is_rotation: bool,
-        button: tk.Button,
-    ) -> None:
-        if self._busy:
-            return
-
-        sign = "+" if direction > 0 else "-"
-        description = (
-            f"rotation {sign}{ROTATION_STEP_DEGREES:.0f}° autour de "
-            f"{axis.upper()} de {TOOL_FRAME}"
-            if is_rotation
-            else f"translation {sign}1 cm selon {axis.upper()} de {TOOL_FRAME}"
-        )
-        stop_event = threading.Event()
-        stop_event.set()
-        self._jog_stop_event = stop_event
-        self._jog_button = button
-        self._busy = True
-        self._set_controls_enabled(False, active_button=button)
-        self._status.set(f"Jog en cours : {description} — relâchez pour arrêter.")
-        threading.Thread(
-            target=self._run_jog,
-            args=(axis, direction, is_rotation, description, stop_event),
-            daemon=True,
-        ).start()
-
-    def _stop_jog(self, event) -> None:
-        if event.widget is self._jog_button:
-            with self._jog_lock:
-                if self._jog_stop_event is not None:
-                    self._jog_stop_event.clear()
-
-    def _run_jog(
-        self,
-        axis: str,
-        direction: float,
-        is_rotation: bool,
-        description: str,
-        stop_event: threading.Event,
-    ) -> None:
-        result = (False, f"Erreur inattendue pendant : {description}.")
-        try:
-            while stop_event.is_set():
-                current_pose = self._fresh_arm_pose()
-                target = list(current_pose)
-                if is_rotation:
-                    half_angle = math.radians(
-                        direction * ROTATION_STEP_DEGREES
-                    ) / 2.0
-                    sine = math.sin(half_angle)
-                    delta_rotation = [
-                        math.cos(half_angle),
-                        sine if axis == "x" else 0.0,
-                        sine if axis == "y" else 0.0,
-                        sine if axis == "z" else 0.0,
-                    ]
-                    target_orientation = _multiply_quaternions(
-                        current_pose[3:7],
-                        delta_rotation,
-                    )
-                    target = _pose_rotated_around_tool_tip(
-                        current_pose,
-                        target_orientation,
-                        self.node._tool_offset_in_arm,
-                    )
-                else:
-                    tool_axis = _rotate_vector_by_quaternion(
-                        TRANSLATION_AXES[axis],
-                        current_pose[3:7],
-                    )
-                    for index, component in enumerate(tool_axis):
-                        target[index] += (
-                            direction * TRANSLATION_STEP_METERS * component
-                        )
-
-                with self._jog_lock:
-                    if not stop_event.is_set():
-                        break
-                    start_received_at = self.node._arm_pose_received_at
-                    self.node.publish_cartesian_target(target)
-                self._wait_for_cartesian_target(
-                    target,
-                    description,
-                    is_rotation,
-                    start_received_at,
-                )
-        except (RuntimeError, TimeoutError, ValueError) as error:
-            result = (False, str(error))
-        else:
-            result = (True, f"Jog arrêté : {description}.")
-        finally:
-            with self._jog_lock:
-                stop_event.clear()
-            self._results.put(result)
-
-    def _return_home(self) -> None:
-        if not messagebox.askyesno(
-            "Confirmer le mouvement",
-            "Ramener le bras droit au home en gardant l'endoscope ?",
-            parent=self.root,
-        ):
-            return
-        self._start_motion(
-            "Retour au home terminé.",
-            self._move_arm_home,
-        )
-
-    def _start_motion(self, description: str, action: Callable[[], None]) -> None:
-        if self._busy:
-            return
-        self._busy = True
-        self._set_controls_enabled(False)
-        self._status.set(f"Mouvement en cours : {description}...")
-        threading.Thread(
-            target=self._run_motion,
-            args=(description, action),
-            daemon=True,
-        ).start()
-
-    def _run_motion(self, description: str, action: Callable[[], None]) -> None:
-        result = (False, f"Erreur inattendue pendant : {description}.")
-        try:
-            action()
-        except (RuntimeError, TimeoutError, ValueError) as error:
-            result = (False, str(error))
-        else:
-            result = (True, f"Mouvement terminé : {description}.")
-        finally:
-            self._results.put(result)
-
-    def _move_cartesian(
-        self,
-        target: Sequence[float],
-        description: str,
-        check_orientation: bool = False,
-    ) -> None:
-        start_received_at = self.node._arm_pose_received_at
-        self.node.publish_cartesian_target(target)
-        self._wait_for_cartesian_target(
-            target,
-            description,
-            check_orientation,
-            start_received_at,
-        )
-
-    def _wait_for_cartesian_target(
-        self,
-        target: Sequence[float],
-        description: str,
-        check_orientation: bool,
-        start_received_at: float,
-    ) -> None:
-        deadline = time.monotonic() + MOTION_TIMEOUT
-
-        while rclpy.ok() and time.monotonic() < deadline:
-            current_pose = self.node._arm_pose
-            received_at = self.node._arm_pose_received_at
-            if (
-                current_pose is None
-                or received_at <= start_received_at
-                or received_at < time.monotonic() - 1.0
-            ):
-                time.sleep(0.1)
-                continue
-
-            position_error = max(
-                abs(current_pose[index] - target[index]) for index in range(3)
-            )
-            orientation_reached = (
-                not check_orientation
-                or _quaternion_angular_error(
-                    current_pose[3:7],
-                    target[3:7],
-                )
-                <= CARTESIAN_ANGULAR_TOLERANCE
-            )
-            if (
-                position_error <= CARTESIAN_TOLERANCE
-                and orientation_reached
-            ):
-                return
             time.sleep(0.1)
-
-        raise TimeoutError(
-            f"La pose cible n'a pas été confirmée en "
-            f"{MOTION_TIMEOUT:.0f} s : {description}."
+            continue
+        error = max(abs(current[index] - pose[index]) for index in range(3))
+        orientation_reached = (
+            not check_orientation
+            or _quaternion_angular_error(current[3:7], pose[3:7])
+            <= CARTESIAN_ANGULAR_TOLERANCE
         )
+        if error <= CARTESIAN_TOLERANCE and orientation_reached:
+            print("Mouvement cartesien confirme par la TF du bras.")
+            return True
+        time.sleep(0.1)
+    raise TimeoutError(
+        "La nouvelle pose du bras n'a pas confirme la cible cartesienne "
+        f"en {MOTION_TIMEOUT:.0f} s. Aucun retour automatique n'est envoye."
+    )
 
-    def _move_arm_home(self) -> None:
-        self.node.publish_joint_target(
-            RIGHT_ARM_INDEX,
-            HOME_RIGHT_ARM,
+
+def _translation_menu(
+    node: LeftEndoscopeManipulation,
+) -> None:
+    while rclpy.ok():
+        print(
+            "\nActions possibles :\n"
+            f"  x+ / x-   : translation +/-10 cm selon l'axe x de {TOOL_FRAME}\n"
+            f"  y+ / y-   : translation +/-10 cm selon l'axe y de {TOOL_FRAME}\n"
+            f"  z+ / z-   : translation +/-10 cm selon l'axe z de {TOOL_FRAME}\n"
+            f"  rx+ / rx- : rotation +/-10 degres autour de x ({TOOL_FRAME})\n"
+            f"  ry+ / ry- : rotation +/-10 degres autour de y ({TOOL_FRAME})\n"
+            f"  rz+ / rz- : rotation +/-10 degres autour de z ({TOOL_FRAME})\n"
+            "  h         : revenir au home du bras en gardant la saisie\n"
+            "  r         : revenir au home puis relacher l'endoscope\n"
+            "  q         : quitter sans autre mouvement"
         )
-
-        def target_reached() -> bool:
-            return all(
-                name in self.node._joint_positions
-                and abs(self.node._joint_positions[name] - value)
-                <= JOINT_TOLERANCE
-                for name, value in zip(
-                    RIGHT_ARM_JOINTS,
-                    HOME_RIGHT_ARM,
-                )
-            )
-
-        if not _spin_until(target_reached, FEEDBACK_TIMEOUT):
-            raise TimeoutError(
-                "Le bras n'a pas atteint sa position home avant le délai imparti."
-            )
-
-    def _poll_results(self) -> None:
         try:
-            succeeded, message = self._results.get_nowait()
-        except Empty:
-            pass
-        else:
-            with self._jog_lock:
-                if self._jog_stop_event is not None:
-                    self._jog_stop_event.clear()
-            self._jog_stop_event = None
-            self._jog_button = None
-            self._busy = False
-            self._set_controls_enabled(True)
-            self._status.set(message)
-            if not succeeded:
-                messagebox.showerror(
-                    "Mouvement impossible",
-                    message,
-                    parent=self.root,
-                )
-        self.root.after(GUI_POLL_PERIOD_MS, self._poll_results)
-
-    def _set_controls_enabled(
-        self,
-        enabled: bool,
-        active_button: Optional[tk.Button] = None,
-    ) -> None:
-        for button in self._motion_buttons:
-            state = (
-                tk.NORMAL
-                if enabled or button is active_button
-                else tk.DISABLED
-            )
-            button.configure(state=state)
-
-    def _close(self) -> None:
-        if self._busy:
-            messagebox.showwarning(
-                "Mouvement en cours",
-                "Attendez la fin du mouvement avant de fermer l'interface.",
-                parent=self.root,
-            )
+            choice = input("Votre choix : ").strip().lower()
+        except EOFError:
+            print("Fin de saisie ; aucun mouvement supplementaire.")
             return
-        if messagebox.askyesno(
-            "Quitter",
-            "Quitter l'interface sans autre mouvement ?",
-            parent=self.root,
-        ):
-            self.root.destroy()
 
-    def run(self) -> None:
-        self.root.mainloop()
+        if choice in ("q", "quitter"):
+            return
+        if choice in ("h", "home"):
+            if not _move_joints(
+                node,
+                "Revenir au home du bras gauche",
+                LEFT_ARM_INDEX,
+                LEFT_ARM_JOINTS,
+                HOME_LEFT_ARM,
+            ):
+                continue
+            continue
+        if choice in ("r", "relacher", "release"):
+            returned_home = _move_joints(
+                node,
+                "Revenir au home du bras gauche en gardant l'endoscope",
+                LEFT_ARM_INDEX,
+                LEFT_ARM_JOINTS,
+                HOME_LEFT_ARM,
+            )
+            if not returned_home:
+                continue
+            opened = _move_joints(
+                node,
+                "Relacher l'endoscope en ouvrant la main gauche",
+                LEFT_HAND_INDEX,
+                LEFT_HAND_JOINTS,
+                HAND_OPEN,
+            )
+            if opened:
+                return
+            continue
+        translation_axis: Optional[str] = None
+        direction = 1.0
+        if choice in TRANSLATION_AXES:
+            translation_axis = choice
+        elif (
+            len(choice) == 2
+            and choice[0] in TRANSLATION_AXES
+            and choice[1] in "+-"
+        ):
+            translation_axis = choice[0]
+            direction = 1.0 if choice[1] == "+" else -1.0
+        elif (
+            len(choice) == 3
+            and choice[0] == "r"
+            and choice[1] in TRANSLATION_AXES
+            and choice[2] in "+-"
+        ):
+            direction = 1.0 if choice[2] == "+" else -1.0
+        else:
+            print(
+                "Choix invalide ; saisir x+/x-, y+/y-, z+/z-, "
+                "rx+/rx-, ry+/ry-, rz+/rz-, h, r ou q."
+            )
+            continue
+
+        current_pose = _wait_for_arm_pose(node)
+        if current_pose is None:
+            raise TimeoutError(
+                f"TF {ARM_COMMAND_FRAME} -> {ARM_FRAME} introuvable "
+                "sur le topic robot."
+            )
+        target = list(current_pose)
+        if translation_axis is not None:
+            tool_axis_in_command_frame = _rotate_vector_by_quaternion(
+                TRANSLATION_AXES[translation_axis],
+                current_pose[3:7],
+            )
+            for index, component in enumerate(tool_axis_in_command_frame):
+                target[index] += direction * TRANSLATION_METERS * component
+            sign = "+" if direction > 0 else "-"
+            _move_cartesian(
+                node,
+                target,
+                f"la translation {sign}10 cm selon l'axe "
+                f"{translation_axis} de {TOOL_FRAME}",
+            )
+        else:
+            axis = choice[1]
+            half_angle = math.radians(direction * ROTATION_DEGREES) / 2.0
+            sine = math.sin(half_angle)
+            delta_rotation = [
+                math.cos(half_angle),
+                sine if axis == "x" else 0.0,
+                sine if axis == "y" else 0.0,
+                sine if axis == "z" else 0.0,
+            ]
+            target_orientation = _multiply_quaternions(
+                current_pose[3:7],
+                delta_rotation,
+            )
+            target = _pose_rotated_around_tool_tip(
+                current_pose,
+                target_orientation,
+                node._tool_offset_in_arm,
+            )
+            sign = "+" if direction > 0 else "-"
+            _move_cartesian(
+                node,
+                target,
+                f"la rotation {sign}{ROTATION_DEGREES:.0f} degres autour de "
+                f"l'axe {axis} de {TOOL_FRAME}",
+                check_orientation=True,
+            )
 
 
 def main(args=None) -> None:
     parser = argparse.ArgumentParser(
-        description="Saisir et déplacer un endoscope avec une interface graphique."
+        description="Saisir un endoscope avec la main gauche et le deplacer."
     )
     robot_id = os.environ.get("ROBOT_ID", "ROBOT_10")
     parser.add_argument("--robot-id", default=robot_id)
@@ -1054,40 +821,30 @@ def main(args=None) -> None:
         "Avant de commencer, degagez la zone de mouvement et positionnez "
         "l'endoscope pour sa saisie."
     )
-    if not _confirm(
-        "Demarrer la sequence home puis saisie de l'endoscope"
-    ):
+    if not _confirm("Demarrer la sequence home puis saisie gauche de l'endoscope"):
         print("Sequence annulee.")
         return
 
     rclpy.init(args=args)
-    node = None
-    executor = None
-    spin_thread = None
+    node = LeftEndoscopeManipulation(joint_topic, tf_topic, Path(options.urdf_path))
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
     try:
-        node = EndoscopeManipulation(
-            joint_topic,
-            tf_topic,
-            Path(options.urdf_path),
-        )
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        spin_thread = threading.Thread(target=executor.spin, daemon=True)
-        spin_thread.start()
-
         if not _move_joints(
             node,
-            "Placer le bras droit en position home",
-            RIGHT_ARM_INDEX,
-            RIGHT_ARM_JOINTS,
-            HOME_RIGHT_ARM,
+            "Placer le bras gauche en position home",
+            LEFT_ARM_INDEX,
+            LEFT_ARM_JOINTS,
+            HOME_LEFT_ARM,
         ):
             return
         if not _move_joints(
             node,
-            "Ouvrir la main droite avant la saisie",
-            RIGHT_HAND_INDEX,
-            RIGHT_HAND_JOINTS,
+            "Ouvrir la main gauche avant la saisie",
+            LEFT_HAND_INDEX,
+            LEFT_HAND_JOINTS,
             HAND_OPEN,
         ):
             return
@@ -1096,26 +853,34 @@ def main(args=None) -> None:
             if not _move_joints(
                 node,
                 f"{description.capitalize()} (pose mesuree)",
-                RIGHT_HAND_INDEX,
-                RIGHT_HAND_JOINTS,
+                LEFT_HAND_INDEX,
+                LEFT_HAND_JOINTS,
                 pose,
             ):
                 print("Saisie interrompue par l'utilisateur.")
                 return
 
+        print(
+            f"\nLe repere {TOOL_FRAME} est fixe par rapport a {PALM_FRAME} : "
+            f"x={TOOL_OFFSET_IN_PALM[0]:.2f} m, "
+            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m."
+        )
+        print(
+            f"En attente de la TF {ARM_COMMAND_FRAME} -> {ARM_FRAME}; "
+            "verifiez que le topic TF du robot est disponible."
+        )
         if _wait_for_arm_pose(node) is None:
             raise TimeoutError(
-                f"TF {ARM_COMMAND_FRAME} -> {ARM_FRAME} "
-                f"non recue en {FEEDBACK_TIMEOUT:.0f} s."
+                f"TF {ARM_COMMAND_FRAME} -> {ARM_FRAME} non recue en "
+                f"{FEEDBACK_TIMEOUT:.0f} s."
             )
-        EndoscopeManipulationInterface(node).run()
+        _translation_menu(node)
+    except KeyboardInterrupt:
+        print("\nArret demande ; aucun mouvement supplementaire ne sera envoye.")
     finally:
-        if executor is not None:
-            executor.shutdown()
-        if spin_thread is not None:
-            spin_thread.join()
-        if node is not None:
-            node.destroy_node()
+        executor.shutdown()
+        spin_thread.join()
+        node.destroy_node()
         rclpy.shutdown()
 
 

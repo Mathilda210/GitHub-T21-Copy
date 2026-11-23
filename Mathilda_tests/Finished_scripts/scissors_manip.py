@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Saisie interactive d'un endoscope et mouvements du bras gauche.
-L'endoscope doit être positionné dans la main du robot 
-Une fois en main on peut faire des translations de 10cm et 
-des rotations de 10° autour de l'axe du repère tool_tip."""
+"""Saisie interactive de ciseaux et mouvements du bras DROIT autour de la pointe de l'outil."""
 
 import argparse
 import math
@@ -26,61 +23,75 @@ from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
 ONLINE_MOTION_TOPIC = "/external/online_motion_command"
-LEFT_ARM_INDEX = 0
-LEFT_HAND_INDEX = 4
-LEFT_ARM_JOINTS = [f"left_arm_joint_{index}" for index in range(7)]
-LEFT_HAND_JOINTS = [
-    f"left_{finger}_joint_{index}"
+RIGHT_ARM_INDEX = 1
+RIGHT_HAND_INDEX = 5
+RIGHT_ARM_JOINTS = [f"right_arm_joint_{index}" for index in range(7)]
+RIGHT_HAND_JOINTS = [
+    f"right_{finger}_joint_{index}"
     for finger in ("index", "middle", "ring", "pinky", "thumb")
     for index in range(3)
 ]
 
-# Pose home gauche relevée dans les exemples du robot.
-HOME_LEFT_ARM = [0.0, 0.4, 0.0, -1.57, 0.0, 0.0, 0.0]
-HAND_OPEN = [0.0] * len(LEFT_HAND_JOINTS)
+# Pose home droite relevée dans les exemples du robot.
+HOME_RIGHT_ARM = [0.0, -0.4, 0.0, -1.57, 0.0, 0.0, 0.0]
+HAND_OPEN = [0.0] * len(RIGHT_HAND_JOINTS)
 
-# Poses de saisie relevées dans Mathilda_tests/Drafts_and_others/poses_3_laparo_hold.
-ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
+# Poses de saisie reprises de suman_hold_laparo_instruments.py.
+SCISSORS_GRASP: List[Tuple[str, List[float]]] = [
     (
-        "refermer le pouce",
+        "enfiler les ciseaux entre le pouce et l'index",
         [
             0.003, 0.0, 0.0,
+            1.221, 0.017, 0.007,
+            0.016, 0.003, 0.001,
             0.0, 0.0, 0.0,
-            0.023, 0.005, 0.0,
-            0.004, 0.0, 0.0,
-            1.534, 1.189, 1.686,
+            1.623, 0.757, 0.0,
         ],
     ),
     (
-        "replier l'index sur l'endoscope",
+        "resserrer les doigts sur les ciseaux",
         [
-            0.719, 1.049, 0.880,
+            0.003, 0.0, 0.0,
+            1.193, 0.201, 0.113,
+            0.016, 0.003, 0.001,
             0.0, 0.0, 0.0,
-            0.023, 0.005, 0.0,
-            0.004, 0.0, 0.0,
-            1.534, 1.120, 1.838,
+            1.623, 0.978, 0.0,
+        ],
+    ),
+    (
+        "mettre l'index en appui",
+        [
+            1.037, 0.247, 0.146,
+            1.265, 0.103, 0.057,
+            0.016, 0.003, 0.001,
+            0.0, 0.0, 0.0,
+            1.623, 0.924, 0.0,
         ],
     ),
 ]
 
 BASE_FRAME = "waist_link_0"
 ARM_COMMAND_FRAME = "waist_link_4"
-ARM_FRAME = "left_arm_link_6"
-PALM_FRAME = "left_palm_link"
+ARM_FRAME = "right_arm_link_6"
+PALM_FRAME = "right_palm_link"
 WAIST_JOINTS = [f"waist_joint_{index}" for index in range(1, 5)]
-LEFT_ARM_LINK_JOINTS = [
-    f"left_arm_joint_{index}" for index in range(7)
+RIGHT_ARM_LINK_JOINTS = [
+    f"right_arm_joint_{index}" for index in range(7)
 ]
-LEFT_ARM_FRAME_JOINTS = LEFT_ARM_LINK_JOINTS + ["left_palm_joint"]
-ARM_CHAIN_FRAMES = [f"left_arm_link_{index}" for index in range(7)] + [
+RIGHT_ARM_FRAME_JOINTS = RIGHT_ARM_LINK_JOINTS + ["right_palm_joint"]
+ARM_CHAIN_FRAMES = [f"right_arm_link_{index}" for index in range(7)] + [
     PALM_FRAME
 ]
 TOOL_FRAME = "tool_tip"
-TOOL_OFFSET_IN_PALM = (0.25, 0.01, 0.0)
+TOOL_OFFSET_IN_PALM = (0.06, -0.30, -0.35)
+TOOL_ROTATION_X_DEGREES = 45.0
 TF_REPUBLISH_PERIOD = 0.1
 TRANSLATION_METERS = 0.10
 ROTATION_DEGREES = 10.0
 JOINT_TOLERANCE = 0.10
+JOINT_VELOCITY_TOLERANCE = 0.01
+GRASP_CONTACT_MIN_PROGRESS = 0.05
+GRASP_CONTACT_STALL_SECONDS = 1.5
 CARTESIAN_TOLERANCE = 0.01
 CARTESIAN_ANGULAR_TOLERANCE = math.radians(2.0)
 FEEDBACK_TIMEOUT = 30.0
@@ -116,7 +127,7 @@ def _parse_vector(
 
 def _load_urdf_joints(urdf_path: Path) -> Dict[str, JointTransform]:
     root = ET.parse(str(urdf_path)).getroot()
-    required_names = WAIST_JOINTS + LEFT_ARM_FRAME_JOINTS
+    required_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS
     joints: Dict[str, JointTransform] = {}
     for joint_name in required_names:
         element = root.find(f"./joint[@name='{joint_name}']")
@@ -151,18 +162,18 @@ def _load_urdf_joints(urdf_path: Path) -> Dict[str, JointTransform]:
         ("waist_joint_2", "waist_link_1", "waist_link_2"),
         ("waist_joint_3", "waist_link_2", "waist_link_3"),
         (WAIST_JOINTS[3], "waist_link_3", ARM_COMMAND_FRAME),
-        (LEFT_ARM_LINK_JOINTS[0], ARM_COMMAND_FRAME, ARM_CHAIN_FRAMES[0]),
+        (RIGHT_ARM_LINK_JOINTS[0], ARM_COMMAND_FRAME, ARM_CHAIN_FRAMES[0]),
     ]
     expected_chain.extend(
         (
-            LEFT_ARM_LINK_JOINTS[index],
+            RIGHT_ARM_LINK_JOINTS[index],
             ARM_CHAIN_FRAMES[index - 1],
             ARM_CHAIN_FRAMES[index],
         )
-        for index in range(1, len(LEFT_ARM_LINK_JOINTS))
+        for index in range(1, len(RIGHT_ARM_LINK_JOINTS))
     )
     expected_chain.append(
-        (LEFT_ARM_FRAME_JOINTS[-1], ARM_FRAME, PALM_FRAME)
+        (RIGHT_ARM_FRAME_JOINTS[-1], ARM_FRAME, PALM_FRAME)
     )
     for joint_name, expected_parent, expected_child in expected_chain:
         joint = joints[joint_name]
@@ -248,6 +259,10 @@ def _multiply_quaternions(
     ]
 
 
+def _conjugate_quaternion(quaternion: Sequence[float]) -> List[float]:
+    return [quaternion[0], -quaternion[1], -quaternion[2], -quaternion[3]]
+
+
 def _quaternion_angular_error(
     first: Sequence[float],
     second: Sequence[float],
@@ -292,18 +307,18 @@ def _rotate_vector_by_quaternion(
 def _pose_rotated_around_tool_tip(
     pose: Sequence[float],
     target_orientation: Sequence[float],
-    tool_offset_in_arm: Sequence[float],
+    tool_pose_in_arm: Sequence[float],
 ) -> List[float]:
     """Build an arm pose that rotates around the fixed tool-tip position."""
     current_tip_offset = _rotate_vector_by_quaternion(
-        tool_offset_in_arm,
+        tool_pose_in_arm[:3],
         pose[3:7],
     )
     tool_tip_position = [
         pose[index] + current_tip_offset[index] for index in range(3)
     ]
     target_tip_offset = _rotate_vector_by_quaternion(
-        tool_offset_in_arm,
+        tool_pose_in_arm[:3],
         target_orientation,
     )
     return [
@@ -312,8 +327,8 @@ def _pose_rotated_around_tool_tip(
     ] + list(target_orientation)
 
 
-class LeftEndoscopeManipulation(Node):
-    """Envoie les commandes du bras gauche et publie les repères utiles à RViz."""
+class ScissorsManipulation(Node):
+    """Envoie les commandes de saisie des ciseaux et publie leurs repères."""
 
     def __init__(
         self,
@@ -321,25 +336,32 @@ class LeftEndoscopeManipulation(Node):
         tf_topic: str,
         urdf_path: Path,
     ) -> None:
-        super().__init__("endoscope_manipulation_left")
+        super().__init__("scissors_manipulation")
         self._motion_publisher = self.create_publisher(
             OnlineMotionCommand, ONLINE_MOTION_TOPIC, 10
         )
         self._joint_positions: Dict[str, float] = {}
+        self._joint_velocities: Dict[str, float] = {}
         self._arm_pose: Optional[List[float]] = None
         self._arm_pose_received_at = 0.0
         self._urdf_joints = _load_urdf_joints(urdf_path)
-        palm_joint_name = LEFT_ARM_FRAME_JOINTS[-1]
+        palm_joint_name = RIGHT_ARM_FRAME_JOINTS[-1]
         palm_pose = _joint_pose(
             self._urdf_joints[palm_joint_name],
             {},
             palm_joint_name,
         )
-        tool_pose_in_palm = list(TOOL_OFFSET_IN_PALM) + [1.0, 0.0, 0.0, 0.0]
-        self._tool_offset_in_arm = _compose_poses(
+        half_tool_rotation = math.radians(TOOL_ROTATION_X_DEGREES) / 2.0
+        tool_pose_in_palm = list(TOOL_OFFSET_IN_PALM) + [
+            math.cos(half_tool_rotation),
+            math.sin(half_tool_rotation),
+            0.0,
+            0.0,
+        ]
+        self._tool_pose_in_arm = _compose_poses(
             palm_pose,
             tool_pose_in_palm,
-        )[:3]
+        )
         self._joint_state_warning_logged = False
         self._command_id = 0
 
@@ -362,6 +384,10 @@ class LeftEndoscopeManipulation(Node):
 
     def _joint_state_cb(self, msg: JointState) -> None:
         self._joint_positions = dict(zip(msg.name, msg.position))
+        if len(msg.name) == len(msg.velocity):
+            self._joint_velocities = dict(zip(msg.name, msg.velocity))
+        else:
+            self._joint_velocities = {}
 
     def _tf_cb(self, msg: TFMessage) -> None:
         for transform in msg.transforms:
@@ -384,7 +410,7 @@ class LeftEndoscopeManipulation(Node):
             self._arm_pose_received_at = time.monotonic()
 
     def _publish_arm_chain(self) -> None:
-        required_joint_names = WAIST_JOINTS + LEFT_ARM_FRAME_JOINTS[:-1]
+        required_joint_names = WAIST_JOINTS + RIGHT_ARM_FRAME_JOINTS[:-1]
         missing_joints = [
             name for name in required_joint_names if name not in self._joint_positions
         ]
@@ -420,7 +446,7 @@ class LeftEndoscopeManipulation(Node):
             )
         )
 
-        for joint_name in LEFT_ARM_LINK_JOINTS:
+        for joint_name in RIGHT_ARM_LINK_JOINTS:
             joint = self._urdf_joints[joint_name]
             transforms.append(
                 self._transform_from_pose(
@@ -431,7 +457,7 @@ class LeftEndoscopeManipulation(Node):
                 )
             )
 
-        palm_joint = self._urdf_joints[LEFT_ARM_FRAME_JOINTS[-1]]
+        palm_joint = self._urdf_joints[RIGHT_ARM_FRAME_JOINTS[-1]]
         transforms.append(
             self._transform_from_pose(
                 palm_joint.parent,
@@ -439,7 +465,7 @@ class LeftEndoscopeManipulation(Node):
                 _joint_pose(
                     palm_joint,
                     self._joint_positions,
-                    LEFT_ARM_FRAME_JOINTS[-1],
+                    RIGHT_ARM_FRAME_JOINTS[-1],
                 ),
                 now,
             )
@@ -481,12 +507,16 @@ class LeftEndoscopeManipulation(Node):
             tool_tf.transform.translation.y,
             tool_tf.transform.translation.z,
         ) = TOOL_OFFSET_IN_PALM
-        tool_tf.transform.rotation.w = 1.0
+        half_tool_rotation = math.radians(TOOL_ROTATION_X_DEGREES) / 2.0
+        tool_tf.transform.rotation.w = math.cos(half_tool_rotation)
+        tool_tf.transform.rotation.x = math.sin(half_tool_rotation)
         self._static_tf_broadcaster.sendTransform(tool_tf)
         self.get_logger().info(
             f"TF statique publiee : {PALM_FRAME} -> {TOOL_FRAME}, "
             f"translation locale x={TOOL_OFFSET_IN_PALM[0]:.2f} m, "
-            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m."
+            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m, "
+            f"z={TOOL_OFFSET_IN_PALM[2]:.2f} m, "
+            f"rotation autour de x={TOOL_ROTATION_X_DEGREES:.0f} deg."
         )
 
     def publish_joint_target(self, arm_index: int, target: Sequence[float]) -> None:
@@ -515,7 +545,7 @@ class LeftEndoscopeManipulation(Node):
 
         command = OnlineMotionCommand()
         command.type = OnlineMotionCommand.CARTESIAN_TRAJECTORY
-        command.target_arm_indices = [LEFT_ARM_INDEX]
+        command.target_arm_indices = [RIGHT_ARM_INDEX]
         command.target_point = [self._cartesian_point(target)]
         command.planner = OnlineMotionCommand.PLANNER_RUCKIG
         command.max_velocity = [ArmConstraintParameters(values=[0.2])]
@@ -575,7 +605,7 @@ def _spin_until(
 
 
 def _move_joints(
-    node: LeftEndoscopeManipulation,
+    node: ScissorsManipulation,
     description: str,
     arm_index: int,
     joints: Sequence[str],
@@ -602,8 +632,67 @@ def _move_joints(
     return True
 
 
+def _move_scissors_grasp_step(
+    node: ScissorsManipulation,
+    description: str,
+    target: Sequence[float],
+) -> bool:
+    if not _confirm(description):
+        return False
+
+    initial_error: Optional[float] = None
+    if all(name in node._joint_positions for name in RIGHT_HAND_JOINTS):
+        initial_error = sum(
+            abs(node._joint_positions[name] - value)
+            for name, value in zip(RIGHT_HAND_JOINTS, target)
+        )
+    node.publish_joint_target(RIGHT_HAND_INDEX, target)
+    progress_detected = False
+    stall_since: Optional[float] = None
+    deadline = time.monotonic() + FEEDBACK_TIMEOUT
+
+    while rclpy.ok() and time.monotonic() < deadline:
+        if all(name in node._joint_positions for name in RIGHT_HAND_JOINTS):
+            errors = [
+                abs(node._joint_positions[name] - value)
+                for name, value in zip(RIGHT_HAND_JOINTS, target)
+            ]
+            total_error = sum(errors)
+            if max(errors) <= JOINT_TOLERANCE:
+                print(f"Position confirmee : {description}.")
+                return True
+
+            if initial_error is None:
+                initial_error = total_error
+            elif initial_error - total_error >= GRASP_CONTACT_MIN_PROGRESS:
+                progress_detected = True
+
+            if all(name in node._joint_velocities for name in RIGHT_HAND_JOINTS):
+                max_velocity = max(
+                    abs(node._joint_velocities[name]) for name in RIGHT_HAND_JOINTS
+                )
+                if (
+                    progress_detected
+                    and max_velocity <= JOINT_VELOCITY_TOLERANCE
+                ):
+                    if stall_since is None:
+                        stall_since = time.monotonic()
+                    elif time.monotonic() - stall_since >= GRASP_CONTACT_STALL_SECONDS:
+                        print(f"Contact confirme : {description}.")
+                        return True
+                elif max_velocity > JOINT_VELOCITY_TOLERANCE:
+                    stall_since = None
+
+        time.sleep(0.1)
+
+    raise TimeoutError(
+        f"La pose de saisie n'a pas ete atteinte et aucun contact stable "
+        f"n'a ete detecte en {FEEDBACK_TIMEOUT:.0f} s : {description}."
+    )
+
+
 def _wait_for_arm_pose(
-    node: LeftEndoscopeManipulation,
+    node: ScissorsManipulation,
 ) -> Optional[List[float]]:
     if node._arm_pose is None and not _spin_until(
         lambda: node._arm_pose is not None, FEEDBACK_TIMEOUT
@@ -613,7 +702,7 @@ def _wait_for_arm_pose(
 
 
 def _move_cartesian(
-    node: LeftEndoscopeManipulation,
+    node: ScissorsManipulation,
     pose: Sequence[float],
     description: str,
     check_orientation: bool = False,
@@ -650,7 +739,7 @@ def _move_cartesian(
 
 
 def _translation_menu(
-    node: LeftEndoscopeManipulation,
+    node: ScissorsManipulation,
 ) -> None:
     while rclpy.ok():
         print(
@@ -661,8 +750,8 @@ def _translation_menu(
             f"  rx+ / rx- : rotation +/-10 degres autour de x ({TOOL_FRAME})\n"
             f"  ry+ / ry- : rotation +/-10 degres autour de y ({TOOL_FRAME})\n"
             f"  rz+ / rz- : rotation +/-10 degres autour de z ({TOOL_FRAME})\n"
-            "  h         : revenir au home du bras en gardant la saisie\n"
-            "  r         : revenir au home puis relacher l'endoscope\n"
+            "  h         : revenir au home du bras en gardant les ciseaux\n"
+            "  r         : revenir au home puis relacher les ciseaux\n"
             "  q         : quitter sans autre mouvement"
         )
         try:
@@ -676,28 +765,28 @@ def _translation_menu(
         if choice in ("h", "home"):
             if not _move_joints(
                 node,
-                "Revenir au home du bras gauche",
-                LEFT_ARM_INDEX,
-                LEFT_ARM_JOINTS,
-                HOME_LEFT_ARM,
+                "Revenir au home du bras droit",
+                RIGHT_ARM_INDEX,
+                RIGHT_ARM_JOINTS,
+                HOME_RIGHT_ARM,
             ):
                 continue
             continue
         if choice in ("r", "relacher", "release"):
             returned_home = _move_joints(
                 node,
-                "Revenir au home du bras gauche en gardant l'endoscope",
-                LEFT_ARM_INDEX,
-                LEFT_ARM_JOINTS,
-                HOME_LEFT_ARM,
+                "Revenir au home du bras droit en gardant les ciseaux",
+                RIGHT_ARM_INDEX,
+                RIGHT_ARM_JOINTS,
+                HOME_RIGHT_ARM,
             )
             if not returned_home:
                 continue
             opened = _move_joints(
                 node,
-                "Relacher l'endoscope en ouvrant la main gauche",
-                LEFT_HAND_INDEX,
-                LEFT_HAND_JOINTS,
+                "Relacher les ciseaux en ouvrant la main droite",
+                RIGHT_HAND_INDEX,
+                RIGHT_HAND_JOINTS,
                 HAND_OPEN,
             )
             if opened:
@@ -735,10 +824,14 @@ def _translation_menu(
                 "sur le topic robot."
             )
         target = list(current_pose)
+        current_tool_orientation = _multiply_quaternions(
+            current_pose[3:7],
+            node._tool_pose_in_arm[3:7],
+        )
         if translation_axis is not None:
             tool_axis_in_command_frame = _rotate_vector_by_quaternion(
                 TRANSLATION_AXES[translation_axis],
-                current_pose[3:7],
+                current_tool_orientation,
             )
             for index, component in enumerate(tool_axis_in_command_frame):
                 target[index] += direction * TRANSLATION_METERS * component
@@ -759,14 +852,18 @@ def _translation_menu(
                 sine if axis == "y" else 0.0,
                 sine if axis == "z" else 0.0,
             ]
-            target_orientation = _multiply_quaternions(
-                current_pose[3:7],
+            target_tool_orientation = _multiply_quaternions(
+                current_tool_orientation,
                 delta_rotation,
+            )
+            target_orientation = _multiply_quaternions(
+                target_tool_orientation,
+                _conjugate_quaternion(node._tool_pose_in_arm[3:7]),
             )
             target = _pose_rotated_around_tool_tip(
                 current_pose,
                 target_orientation,
-                node._tool_offset_in_arm,
+                node._tool_pose_in_arm,
             )
             sign = "+" if direction > 0 else "-"
             _move_cartesian(
@@ -780,7 +877,7 @@ def _translation_menu(
 
 def main(args=None) -> None:
     parser = argparse.ArgumentParser(
-        description="Saisir un endoscope avec la main gauche et le deplacer."
+        description="Saisir des ciseaux et les deplacer avec validation utilisateur."
     )
     robot_id = os.environ.get("ROBOT_ID", "ROBOT_10")
     parser.add_argument("--robot-id", default=robot_id)
@@ -819,14 +916,14 @@ def main(args=None) -> None:
 
     print(
         "Avant de commencer, degagez la zone de mouvement et positionnez "
-        "l'endoscope pour sa saisie."
+        "les ciseaux pour leur saisie."
     )
-    if not _confirm("Demarrer la sequence home puis saisie gauche de l'endoscope"):
+    if not _confirm("Demarrer la sequence home puis saisie des ciseaux"):
         print("Sequence annulee.")
         return
 
     rclpy.init(args=args)
-    node = LeftEndoscopeManipulation(joint_topic, tf_topic, Path(options.urdf_path))
+    node = ScissorsManipulation(joint_topic, tf_topic, Path(options.urdf_path))
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
@@ -834,27 +931,25 @@ def main(args=None) -> None:
     try:
         if not _move_joints(
             node,
-            "Placer le bras gauche en position home",
-            LEFT_ARM_INDEX,
-            LEFT_ARM_JOINTS,
-            HOME_LEFT_ARM,
+            "Placer le bras droit en position home",
+            RIGHT_ARM_INDEX,
+            RIGHT_ARM_JOINTS,
+            HOME_RIGHT_ARM,
         ):
             return
         if not _move_joints(
             node,
-            "Ouvrir la main gauche avant la saisie",
-            LEFT_HAND_INDEX,
-            LEFT_HAND_JOINTS,
+            "Ouvrir la main droite avant la saisie",
+            RIGHT_HAND_INDEX,
+            RIGHT_HAND_JOINTS,
             HAND_OPEN,
         ):
             return
 
-        for description, pose in ENDOSCOPE_GRASP:
-            if not _move_joints(
+        for description, pose in SCISSORS_GRASP:
+            if not _move_scissors_grasp_step(
                 node,
                 f"{description.capitalize()} (pose mesuree)",
-                LEFT_HAND_INDEX,
-                LEFT_HAND_JOINTS,
                 pose,
             ):
                 print("Saisie interrompue par l'utilisateur.")
@@ -863,7 +958,9 @@ def main(args=None) -> None:
         print(
             f"\nLe repere {TOOL_FRAME} est fixe par rapport a {PALM_FRAME} : "
             f"x={TOOL_OFFSET_IN_PALM[0]:.2f} m, "
-            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m."
+            f"y={TOOL_OFFSET_IN_PALM[1]:.2f} m, "
+            f"z={TOOL_OFFSET_IN_PALM[2]:.2f} m, "
+            f"rotation autour de x={TOOL_ROTATION_X_DEGREES:.0f} deg."
         )
         print(
             f"En attente de la TF {ARM_COMMAND_FRAME} -> {ARM_FRAME}; "
