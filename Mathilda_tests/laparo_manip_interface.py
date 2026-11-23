@@ -612,7 +612,12 @@ class LaparoManipulationNode(Node):
         transform.transform.rotation.x = math.sin(half_rotation)
         self._static_tf_broadcaster.sendTransform(transform)
 
-    def publish_joint_target(self, side: str, target: Sequence[float]) -> None:
+    def publish_joint_target(
+        self,
+        side: str,
+        target_arm_index: int,
+        target: Sequence[float],
+    ) -> None:
         if self.count_subscribers(ONLINE_MOTION_TOPIC) == 0:
             raise RuntimeError(
                 f"Aucun abonne au topic de commande {ONLINE_MOTION_TOPIC}."
@@ -620,7 +625,7 @@ class LaparoManipulationNode(Node):
         setup = self.setups[side]
         command = OnlineMotionCommand()
         command.type = OnlineMotionCommand.JOINT_TRAJECTORY
-        command.target_arm_indices = [setup.arm.arm_index]
+        command.target_arm_indices = [target_arm_index]
         command.target_point = [self._joint_point(target)]
         command.planner = OnlineMotionCommand.PLANNER_RUCKIG
         command.max_velocity = [ArmConstraintParameters(values=[0.4])]
@@ -716,7 +721,11 @@ def _move_scissors_grasp_step(
             abs(node._joint_positions[name] - value)
             for name, value in zip(joints, target)
         )
-    node.publish_joint_target(side, target)
+    node.publish_joint_target(
+        side,
+        node.setups[side].arm.hand_index,
+        target,
+    )
     progress_detected = False
     stall_since: Optional[float] = None
     deadline = time.monotonic() + FEEDBACK_TIMEOUT
@@ -1138,14 +1147,20 @@ class LaparoManipulationInterface:
         setup = self._active_tools[step.side]
         if step.action == "home":
             joints = setup.arm.arm_joints
+            target_arm_index = setup.arm.arm_index
         elif step.action in ("open", "grasp"):
             joints = setup.arm.hand_joints
+            target_arm_index = setup.arm.hand_index
         else:
             raise ValueError(f"Action de séquence inconnue : {step.action!r}.")
         if step.action == "grasp" and step.allow_contact:
             _move_scissors_grasp_step(self._node, step.side, step.target)
             return
-        self._node.publish_joint_target(step.side, step.target)
+        self._node.publish_joint_target(
+            step.side,
+            target_arm_index,
+            step.target,
+        )
         _wait_for_joint_target(self._node, step.side, joints, step.target)
 
     def _finish_workflow(self) -> None:

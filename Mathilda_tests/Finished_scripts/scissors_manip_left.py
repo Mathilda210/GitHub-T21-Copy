@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Saisie interactive de ciseaux et mouvements du bras gauche --> A TESTER """
+"""Saisie interactive de ciseaux et mouvements du bras gauche """
 
 import argparse
 import math
