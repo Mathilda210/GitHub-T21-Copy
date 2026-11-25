@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Interface graphique autonome pour saisir et déplacer les outils laparo."""
+"""Interface graphique autonome pour saisir et déplacer les outils laparo.
+Possibilité de prendre endoscope et/ou ciseaux de laparo
+Interface simple pour trasnlations et rotations autour du tool tip 
+Repères tool tip définis depuis la paume et orientés autour de leurs axes
+Modification des repères outils pour plus de clareté
+Ok pour ciseaux dans main gauche mais pas endoscope main droite """
 
 import argparse
 import math
@@ -169,30 +174,37 @@ class ToolSetup:
     grasp_steps: List[Tuple[str, List[float]]]
     tool_offset_in_palm: Tuple[float, float, float]
     tool_rotation_x_degrees: float
+    tool_rotation_y_degrees: float
+    tool_rotation_z_degrees: float
     tool_frame: str
 
 
 def _make_tool_setup(side: str, tool_key: str) -> ToolSetup:
     arm = ARM_CONFIGS[side]
+    mirror = -1.0 if side == "left" else 1.0
     if tool_key == "endoscope":
         return ToolSetup(
             arm=arm,
             tool_key=tool_key,
             tool_label="endoscope",
             grasp_steps=ENDOSCOPE_GRASP,
-            tool_offset_in_palm=(0.25, 0.01, 0.0),
+            tool_offset_in_palm=(0.25, 0.01 * mirror, 0.0),
             tool_rotation_x_degrees=0.0,
+            tool_rotation_y_degrees=90.0,
+            tool_rotation_z_degrees=0.0,
             tool_frame=f"{side}_endoscope{TOOL_FRAME_SUFFIX}",
         )
     if tool_key == "ciseaux":
-        # La géométrie gauche est le miroir de celle du script droit et reste à valider.
+        # La configuration gauche est le miroir sagittal de celle de droite.
         return ToolSetup(
             arm=arm,
             tool_key=tool_key,
             tool_label="ciseaux",
             grasp_steps=SCISSORS_GRASP,
-            tool_offset_in_palm=(0.06, 0.30 if side == "left" else -0.30, -0.35),
-            tool_rotation_x_degrees=-45.0 if side == "left" else 45.0,
+            tool_offset_in_palm=(0.06, -0.30 * mirror, -0.35),
+            tool_rotation_x_degrees=135.0 * mirror,
+            tool_rotation_y_degrees=0.0,
+            tool_rotation_z_degrees=90.0 * mirror,
             tool_frame=f"{side}_ciseaux{TOOL_FRAME_SUFFIX}",
         )
     raise ValueError(f"Outil inconnu : {tool_key!r}.")
@@ -342,6 +354,23 @@ def _multiply_quaternions(
     ]
 
 
+def _tool_rotation_quaternion(
+    rotation_x_degrees: float,
+    rotation_y_degrees: float,
+    rotation_z_degrees: float,
+) -> List[float]:
+    half_x = math.radians(rotation_x_degrees) / 2.0
+    half_y = math.radians(rotation_y_degrees) / 2.0
+    half_z = math.radians(rotation_z_degrees) / 2.0
+    rotation_x = [math.cos(half_x), math.sin(half_x), 0.0, 0.0]
+    rotation_y = [math.cos(half_y), 0.0, math.sin(half_y), 0.0]
+    rotation_z = [math.cos(half_z), 0.0, 0.0, math.sin(half_z)]
+    return _multiply_quaternions(
+        _multiply_quaternions(rotation_x, rotation_y),
+        rotation_z,
+    )
+
+
 def _conjugate_quaternion(quaternion: Sequence[float]) -> List[float]:
     return [quaternion[0], -quaternion[1], -quaternion[2], -quaternion[3]]
 
@@ -458,13 +487,13 @@ class LaparoManipulationNode(Node):
                 {},
                 palm_joint_name,
             )
-            half_rotation = math.radians(setup.tool_rotation_x_degrees) / 2.0
-            tool_pose_in_palm = list(setup.tool_offset_in_palm) + [
-                math.cos(half_rotation),
-                math.sin(half_rotation),
-                0.0,
-                0.0,
-            ]
+            tool_pose_in_palm = list(setup.tool_offset_in_palm) + (
+                _tool_rotation_quaternion(
+                    setup.tool_rotation_x_degrees,
+                    setup.tool_rotation_y_degrees,
+                    setup.tool_rotation_z_degrees,
+                )
+            )
             self._tool_poses_in_arm[side] = _compose_poses(
                 palm_pose,
                 tool_pose_in_palm,
@@ -513,12 +542,15 @@ class LaparoManipulationNode(Node):
                 self._arm_pose_received_at[side] = time.monotonic()
 
     def _publish_arm_chains(self) -> None:
-        required_joint_names = list(WAIST_JOINTS)
-        for setup in self.setups.values():
-            required_joint_names.extend(setup.arm.arm_frame_joints[:-1])
         missing_joints = [
-            name for name in required_joint_names if name not in self._joint_positions
+            name for name in WAIST_JOINTS if name not in self._joint_positions
         ]
+        missing_joints.extend(
+            name
+            for setup in self.setups.values()
+            for name in setup.arm.arm_frame_joints[:-1]
+            if name not in self._joint_positions
+        )
         if missing_joints:
             if not self._joint_state_warning_logged:
                 self.get_logger().warning(
@@ -526,9 +558,11 @@ class LaparoManipulationNode(Node):
                     + ", ".join(missing_joints)
                 )
                 self._joint_state_warning_logged = True
+        else:
+            self._joint_state_warning_logged = False
+        if any(name not in self._joint_positions for name in WAIST_JOINTS):
             return
 
-        self._joint_state_warning_logged = False
         now = self.get_clock().now().to_msg()
         transforms: List[TransformStamped] = []
         waist_pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
@@ -551,6 +585,11 @@ class LaparoManipulationNode(Node):
         )
         for setup in self.setups.values():
             arm = setup.arm
+            if any(
+                name not in self._joint_positions
+                for name in arm.arm_frame_joints[:-1]
+            ):
+                continue
             for joint_name in arm.arm_link_joints:
                 joint = self._urdf_joints[joint_name]
                 transforms.append(
@@ -612,9 +651,17 @@ class LaparoManipulationNode(Node):
             transform.transform.translation.y,
             transform.transform.translation.z,
         ) = setup.tool_offset_in_palm
-        half_rotation = math.radians(setup.tool_rotation_x_degrees) / 2.0
-        transform.transform.rotation.w = math.cos(half_rotation)
-        transform.transform.rotation.x = math.sin(half_rotation)
+        rotation = _tool_rotation_quaternion(
+            setup.tool_rotation_x_degrees,
+            setup.tool_rotation_y_degrees,
+            setup.tool_rotation_z_degrees,
+        )
+        (
+            transform.transform.rotation.w,
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+        ) = rotation
         self._static_tf_broadcaster.sendTransform(transform)
 
     def publish_joint_target(
@@ -1056,7 +1103,7 @@ class LaparoManipulationInterface:
                     f"Relâcher l'outil en ouvrant la main {arm.label}",
                     [0.0] * len(arm.hand_joints),
                 )
-            )
+            ) 
         return steps
 
     def _build_home_workflow(self) -> List[WorkflowStep]:
@@ -1526,45 +1573,24 @@ class LaparoManipulationInterface:
 
     def run(self) -> None:
         self.root.mainloop()
-
+ 
 
 def _default_urdf_path() -> Path:
-    urdf_name = "tora_double_one_x.urdf"
-    candidates: List[Path] = []
-    try:
-        from ament_index_python.packages import (
-            PackageNotFoundError,
-            get_package_share_directory,
-        )
-    except ImportError:
-        package_share = None
-    else:
-        try:
-            package_share = Path(
-                get_package_share_directory("pointcloud2_perception")
-            )
-        except PackageNotFoundError:
-            package_share = None
-    if package_share is not None:
-        candidates.extend(
-            [
-                package_share
-                / "URDF"
-                / "tora_double_one_x_description"
-                / "urdf"
-                / urdf_name,
-                package_share / urdf_name,
-            ]
-        )
-
-    script_directory = Path(__file__).resolve().parent
-    candidates.extend(
-        [
-            script_directory.parent / "Others" / urdf_name,
-            script_directory / "Others" / urdf_name,
-        ]
+    relative_path = (
+        Path("px_robot_code")
+        / "nav"
+        / "control_location"
+        / "pointcloud2_perception"
+        / "share"
+        / "pointcloud2_perception"
+        / "URDF"
+        / "tora_double_one_x_description"
+        / "urdf"
+        / "tora_double_one_x.urdf"
     )
-    return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    robot_path = Path("/home/user") / relative_path
+    workspace_path = Path(__file__).resolve().parents[1] / relative_path
+    return robot_path if robot_path.is_file() else workspace_path
 
 
 def main(args=None) -> None:

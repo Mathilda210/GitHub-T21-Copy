@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Interface graphique autonome pour saisir et déplacer les outils laparo."""
+"""Interface graphique autonome pour saisir et déplacer les outils laparo.
+Possibilité de prendre endoscope et/ou ciseaux de laparo
+Interface simple pour trasnlations et rotations autour du tool tip 
+Repères tool tip définis depuis la paume et orientés autour de leurs axes
+Modification des repères outils pour plus de clareté
+Ok pour ciseaux dans main gauche mais pas endoscope main droite """
 
 import argparse
 import math
@@ -99,6 +104,11 @@ ARM_CONFIGS = {
     "left": _make_arm_config("left"),
 }
 
+LAPARO_POSITION: Dict[str, List[float]] = {
+    "left": [-0.930, 1.460, -1.260, -1.800, 0.430, -1.120, -0.340],
+    "right": [1.040, -2.060, -0.870, -1.560, 1.110, -0.030, 0.380],
+}
+
 ENDOSCOPE_GRASP: List[Tuple[str, List[float]]] = [
     (
         "refermer le pouce",
@@ -164,30 +174,34 @@ class ToolSetup:
     grasp_steps: List[Tuple[str, List[float]]]
     tool_offset_in_palm: Tuple[float, float, float]
     tool_rotation_x_degrees: float
+    tool_rotation_z_degrees: float
     tool_frame: str
 
 
 def _make_tool_setup(side: str, tool_key: str) -> ToolSetup:
     arm = ARM_CONFIGS[side]
+    mirror = -1.0 if side == "left" else 1.0
     if tool_key == "endoscope":
         return ToolSetup(
             arm=arm,
             tool_key=tool_key,
             tool_label="endoscope",
             grasp_steps=ENDOSCOPE_GRASP,
-            tool_offset_in_palm=(0.25, 0.01, 0.0),
-            tool_rotation_x_degrees=0.0,
+            tool_offset_in_palm=(0.25, 0.01 * mirror, 0.0),
+            tool_rotation_x_degrees=90.0 * mirror,
+            tool_rotation_z_degrees=0.0,
             tool_frame=f"{side}_endoscope{TOOL_FRAME_SUFFIX}",
         )
     if tool_key == "ciseaux":
-        # La géométrie gauche est le miroir de celle du script droit et reste à valider.
+        # La configuration gauche est le miroir sagittal de celle de droite.
         return ToolSetup(
             arm=arm,
             tool_key=tool_key,
             tool_label="ciseaux",
             grasp_steps=SCISSORS_GRASP,
-            tool_offset_in_palm=(0.06, 0.30 if side == "left" else -0.30, -0.35),
-            tool_rotation_x_degrees=-45.0 if side == "left" else 45.0,
+            tool_offset_in_palm=(0.06, -0.30 * mirror, -0.35),
+            tool_rotation_x_degrees=135.0 * mirror,
+            tool_rotation_z_degrees=90.0 * mirror,
             tool_frame=f"{side}_ciseaux{TOOL_FRAME_SUFFIX}",
         )
     raise ValueError(f"Outil inconnu : {tool_key!r}.")
@@ -337,6 +351,17 @@ def _multiply_quaternions(
     ]
 
 
+def _tool_rotation_quaternion(
+    rotation_x_degrees: float,
+    rotation_z_degrees: float,
+) -> List[float]:
+    half_x = math.radians(rotation_x_degrees) / 2.0
+    half_z = math.radians(rotation_z_degrees) / 2.0
+    rotation_x = [math.cos(half_x), math.sin(half_x), 0.0, 0.0]
+    rotation_z = [math.cos(half_z), 0.0, 0.0, math.sin(half_z)]
+    return _multiply_quaternions(rotation_x, rotation_z)
+
+
 def _conjugate_quaternion(quaternion: Sequence[float]) -> List[float]:
     return [quaternion[0], -quaternion[1], -quaternion[2], -quaternion[3]]
 
@@ -453,13 +478,12 @@ class LaparoManipulationNode(Node):
                 {},
                 palm_joint_name,
             )
-            half_rotation = math.radians(setup.tool_rotation_x_degrees) / 2.0
-            tool_pose_in_palm = list(setup.tool_offset_in_palm) + [
-                math.cos(half_rotation),
-                math.sin(half_rotation),
-                0.0,
-                0.0,
-            ]
+            tool_pose_in_palm = list(setup.tool_offset_in_palm) + (
+                _tool_rotation_quaternion(
+                    setup.tool_rotation_x_degrees,
+                    setup.tool_rotation_z_degrees,
+                )
+            )
             self._tool_poses_in_arm[side] = _compose_poses(
                 palm_pose,
                 tool_pose_in_palm,
@@ -508,12 +532,15 @@ class LaparoManipulationNode(Node):
                 self._arm_pose_received_at[side] = time.monotonic()
 
     def _publish_arm_chains(self) -> None:
-        required_joint_names = list(WAIST_JOINTS)
-        for setup in self.setups.values():
-            required_joint_names.extend(setup.arm.arm_frame_joints[:-1])
         missing_joints = [
-            name for name in required_joint_names if name not in self._joint_positions
+            name for name in WAIST_JOINTS if name not in self._joint_positions
         ]
+        missing_joints.extend(
+            name
+            for setup in self.setups.values()
+            for name in setup.arm.arm_frame_joints[:-1]
+            if name not in self._joint_positions
+        )
         if missing_joints:
             if not self._joint_state_warning_logged:
                 self.get_logger().warning(
@@ -521,9 +548,11 @@ class LaparoManipulationNode(Node):
                     + ", ".join(missing_joints)
                 )
                 self._joint_state_warning_logged = True
+        else:
+            self._joint_state_warning_logged = False
+        if any(name not in self._joint_positions for name in WAIST_JOINTS):
             return
 
-        self._joint_state_warning_logged = False
         now = self.get_clock().now().to_msg()
         transforms: List[TransformStamped] = []
         waist_pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
@@ -546,6 +575,11 @@ class LaparoManipulationNode(Node):
         )
         for setup in self.setups.values():
             arm = setup.arm
+            if any(
+                name not in self._joint_positions
+                for name in arm.arm_frame_joints[:-1]
+            ):
+                continue
             for joint_name in arm.arm_link_joints:
                 joint = self._urdf_joints[joint_name]
                 transforms.append(
@@ -607,9 +641,16 @@ class LaparoManipulationNode(Node):
             transform.transform.translation.y,
             transform.transform.translation.z,
         ) = setup.tool_offset_in_palm
-        half_rotation = math.radians(setup.tool_rotation_x_degrees) / 2.0
-        transform.transform.rotation.w = math.cos(half_rotation)
-        transform.transform.rotation.x = math.sin(half_rotation)
+        rotation = _tool_rotation_quaternion(
+            setup.tool_rotation_x_degrees,
+            setup.tool_rotation_z_degrees,
+        )
+        (
+            transform.transform.rotation.w,
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+        ) = rotation
         self._static_tf_broadcaster.sendTransform(transform)
 
     def publish_joint_target(
@@ -1051,7 +1092,7 @@ class LaparoManipulationInterface:
                     f"Relâcher l'outil en ouvrant la main {arm.label}",
                     [0.0] * len(arm.hand_joints),
                 )
-            )
+            ) 
         return steps
 
     def _build_home_workflow(self) -> List[WorkflowStep]:
@@ -1062,6 +1103,17 @@ class LaparoManipulationInterface:
                 f"Revenir au home en gardant l'outil dans la main "
                 f"{setup.arm.label}",
                 list(setup.arm.home),
+            )
+            for side, setup in self._active_tools.items()
+        ]
+
+    def _build_laparo_workflow(self) -> List[WorkflowStep]:
+        return [
+            WorkflowStep(
+                side,
+                "laparo",
+                f"Placer le bras {setup.arm.label} en position laparo sur le phantom",
+                list(LAPARO_POSITION[side]),
             )
             for side, setup in self._active_tools.items()
         ]
@@ -1145,7 +1197,7 @@ class LaparoManipulationInterface:
         if self._node is None or step.target is None:
             raise RuntimeError("Le nœud ROS ou la cible du mouvement est absent.")
         setup = self._active_tools[step.side]
-        if step.action == "home":
+        if step.action in ("home", "laparo"):
             joints = setup.arm.arm_joints
             target_arm_index = setup.arm.arm_index
         elif step.action in ("open", "grasp"):
@@ -1176,6 +1228,8 @@ class LaparoManipulationInterface:
         elif kind == "grasp":
             self._grasp_complete = True
             self._render_options("Prise en main terminée. Choisissez l'action suivante.")
+        elif kind == "laparo":
+            self._render_options("Position laparo atteinte. Choisissez l'action suivante.")
         else:
             self._render_options("Position home atteinte. Les outils restent saisis.")
 
@@ -1187,6 +1241,16 @@ class LaparoManipulationInterface:
             text="Que souhaitez-vous faire ?",
             font=("TkDefaultFont", 16, "bold"),
         ).pack(pady=(0, 12))
+        tk.Label(
+            self._content,
+            text=(
+                "Après la saisie, les bras sont au home. Le guidage démarre "
+                "depuis la position actuelle; vous pouvez d'abord choisir "
+                "la position laparo sur le phantom."
+            ),
+            wraplength=540,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
         for setup in self._active_tools.values():
             tk.Label(
                 self._content,
@@ -1212,9 +1276,17 @@ class LaparoManipulationInterface:
             command=self._return_home,
             width=44,
         ).pack(pady=5)
+        laparo_button = tk.Button(
+            self._content,
+            text="Mettre en position laparo sur le phantom",
+            command=self._move_to_laparo_position,
+            width=44,
+            state=tk.NORMAL if self._grasp_complete else tk.DISABLED,
+        )
+        laparo_button.pack(pady=5)
         control_button = tk.Button(
             self._content,
-            text="Ouvrir l'interface de guidage",
+            text="Ouvrir le guidage depuis la position actuelle",
             command=self._open_guidance,
             width=44,
             state=tk.NORMAL if self._grasp_complete else tk.DISABLED,
@@ -1241,6 +1313,11 @@ class LaparoManipulationInterface:
 
     def _return_home(self) -> None:
         self._begin_workflow("home", self._build_home_workflow())
+
+    def _move_to_laparo_position(self) -> None:
+        if not self._grasp_complete:
+            return
+        self._begin_workflow("laparo", self._build_laparo_workflow())
 
     def _open_guidance(self) -> None:
         if not self._grasp_complete:
@@ -1485,7 +1562,7 @@ class LaparoManipulationInterface:
 
     def run(self) -> None:
         self.root.mainloop()
-
+ 
 
 def _default_urdf_path() -> Path:
     relative_path = (
